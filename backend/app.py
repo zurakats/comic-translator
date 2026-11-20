@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from image_processor import extract_bubbles, render_bubbles, batch_gemini_translate, selectOCR, translator
+from image_processor import extract_bubbles, render_bubbles, batch_gemini_translate, batch_google_translate, selectOCR
 from werkzeug.utils import secure_filename
 import os
 import json
@@ -69,14 +69,7 @@ def process_image_endpoint():
             translations = batch_gemini_translate(all_bubbles, translate_code, targetLang, api_key)
 
         # Fallback googletrans untuk bubble yang belum dapat translation (gemini gagal / engine googletrans)
-        for b in all_bubbles:
-            if not translations.get(b['id']):
-                if b['cleaned_text'].strip():
-                    translations[b['id']] = translator.translate(
-                        b['cleaned_text'], src=translate_code, dest=targetLang
-                    ).text
-                else:
-                    translations[b['id']] = "[Teks tidak terbaca]"
+        translations = batch_google_translate(all_bubbles, translate_code, targetLang, translations)
 
         # Fase 3: gambar ulang tiap gambar pakai hasil translate
         results = []

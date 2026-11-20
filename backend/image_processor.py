@@ -1,10 +1,10 @@
+import asyncio
 import cv2
 import torch
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from manga_ocr import MangaOcr
 import easyocr
-import numpy as np
 from googletrans import Translator
 import pathlib
 import re
@@ -21,8 +21,6 @@ pathlib.PosixPath = pathlib.WindowsPath
 model_path = "yolo-model/bubble-detector-new/weights/best.pt"
 model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, source='github', force_reload=True)
 model.conf = 0.75
-
-translator = Translator()
 
 def process_language(sourceLang):
     try:        
@@ -153,6 +151,33 @@ def batch_gemini_translate(bubbles, source_lang, target_lang, api_key, batch_siz
             except Exception as e:
                 print(f"Gemini batch API Error: {e}")
                 break
+
+    return translations
+
+async def _async_google_translate(items, source_lang, target_lang):
+    """Translate bubble items asynchronously using googletrans v4.0.2."""
+    async with Translator() as translator:
+        texts = [item["text"] for item in items]
+        results = await translator.translate(texts, src=source_lang, dest=target_lang)
+        if not isinstance(results, list):
+            results = [results]
+        return {item["id"]: res.text for item, res in zip(items, results)}
+
+def batch_google_translate(bubbles, source_lang, target_lang, existing_translations=None):
+    """Translate any remaining untranslated bubbles via googletrans v4.0.2."""
+    translations = dict(existing_translations) if existing_translations else {}
+    pending = []
+
+    for b in bubbles:
+        if translations.get(b["id"]):
+            continue
+        if b["cleaned_text"].strip():
+            pending.append({"id": b["id"], "text": b["cleaned_text"]})
+        else:
+            translations[b["id"]] = "[Teks tidak terbaca]"
+
+    if pending:
+        translations.update(asyncio.run(_async_google_translate(pending, source_lang, target_lang)))
 
     return translations
 

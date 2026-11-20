@@ -3,11 +3,10 @@ flask-cors
 torch
 manga-ocr
 easyocr
-googletrans==4.0.0rc1
+googletrans==4.0.2
 opencv-python-headless
 Pillow
 ultralytics
 python-dotenv
 pandas
 pyphen
-google-genai
