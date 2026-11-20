@@ -1,4 +1,7 @@
 import asyncio
+from collections import OrderedDict
+import os
+import threading
 import cv2
 import torch
 import numpy as np
@@ -18,9 +21,50 @@ dic_en = pyphen.Pyphen(lang='en_US')
 
 pathlib.PosixPath = pathlib.WindowsPath
 
-model_path = "yolo-model/bubble-detector-new/weights/best.pt"
-model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, source='github', force_reload=True)
-model.conf = 0.75
+model_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "yolo-model",
+    "bubble-detector-new",
+    "weights",
+    "best.pt",
+)
+_yolo_model = None
+_yolo_lock = threading.Lock()
+
+
+def _get_cached_yolov5_dir():
+    hub_dir = torch.hub.get_dir()
+    for repo_dir_name in ("ultralytics_yolov5_master", "ultralytics_yolov5_main"):
+        candidate = os.path.join(hub_dir, repo_dir_name)
+        if os.path.isfile(os.path.join(candidate, "hubconf.py")):
+            return candidate
+    return None
+
+
+def get_yolo_model():
+    """Lazily load and cache the YOLOv5 speech-bubble detector."""
+    global _yolo_model
+    if _yolo_model is not None:
+        return _yolo_model
+
+    with _yolo_lock:
+        if _yolo_model is not None:
+            return _yolo_model
+
+        cached_dir = _get_cached_yolov5_dir()
+        if cached_dir is not None:
+            loaded = torch.hub.load(cached_dir, 'custom', path=model_path, source='local')
+        else:
+            loaded = torch.hub.load(
+                'ultralytics/yolov5',
+                'custom',
+                path=model_path,
+                source='github',
+                force_reload=False,
+            )
+        loaded.conf = 0.75
+        _yolo_model = loaded
+        return _yolo_model
 
 def process_language(sourceLang):
     try:        
@@ -51,13 +95,25 @@ def get_language_codes(sourceLang):
 
     return mapping[sourceLang] 
 
+MAX_OCR_CACHE = 2
+_ocr_cache = OrderedDict()
+_ocr_lock = threading.Lock()
+
 def selectOCR(sourceLang):
+    """Return a cached OCR reader instance, engine index, and translation code."""
     easyocr_code, translate_code = get_language_codes(sourceLang)
-    
-    if (easyocr_code == "jp"):
-        return MangaOcr(), 0, translate_code
-    else:
-        return easyocr.Reader([f'{easyocr_code}']), 1, translate_code
+    index = 0 if easyocr_code == "jp" else 1
+
+    with _ocr_lock:
+        if easyocr_code in _ocr_cache:
+            _ocr_cache.move_to_end(easyocr_code)
+            return _ocr_cache[easyocr_code], index, translate_code
+
+        ocr_instance = MangaOcr() if index == 0 else easyocr.Reader([easyocr_code])
+        _ocr_cache[easyocr_code] = ocr_instance
+        if len(_ocr_cache) > MAX_OCR_CACHE:
+            _ocr_cache.popitem(last=False)
+        return ocr_instance, index, translate_code
 
 def clean_ocr_text(ocr_text):
     if not ocr_text:
@@ -254,7 +310,7 @@ def extract_bubbles(image_path, ocr, index, translate_code, image_id):
     img_pil = Image.fromarray(img_rgb)
     draw = ImageDraw.Draw(img_pil)
 
-    results = model(img_rgb)
+    results = get_yolo_model()(img_rgb)
     detections = results.pandas().xyxy[0]
 
     bubbles = []
