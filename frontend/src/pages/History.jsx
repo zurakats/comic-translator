@@ -7,16 +7,22 @@ const History = () => {
   const [selectedItem, setSelectedItem] = useState(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('translationHistory');
-    if (saved) {
-      setHistory(JSON.parse(saved));
-    }
+    fetch('http://127.0.0.1:5000/history')
+      .then(res => res.json())
+      .then(data => setHistory(data))
+      .catch(err => console.error("Gagal mengambil history:", err));
   }, []);
 
-  const clearHistory = () => {
+  const clearHistory = async () => {
     if (window.confirm("Apakah Anda yakin ingin menghapus semua riwayat terjemahan?")) {
-      localStorage.removeItem('translationHistory');
-      setHistory([]);
+      try {
+        const res = await fetch('http://127.0.0.1:5000/clear-history', { method: 'POST' });
+        if (res.ok) {
+          setHistory([]);
+        }
+      } catch (err) {
+        console.error("Gagal menghapus history:", err);
+      }
     }
   };
 
