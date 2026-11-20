@@ -1,152 +1,127 @@
-# 📚 Comic & Manga Translator v2
+# Comic & Manga Translator v2
 
-A modern, fast, and feature-rich web application to translate comic/manga pages. The application automatically detects speech bubbles using **YOLOv5**, extracts text using **Manga-OCR** (for Japanese) or **EasyOCR** (for English/Korean/Chinese), translates it using **Google Gemini AI** or **Google Translate**, and renders the translation back onto the page with clean, aligned, and hyphenated text blocks.
-
----
-
-## ✨ Features
-
-- **Automatic Bubble Detection**: Utilizes a custom-trained **YOLOv5** PyTorch model to identify bubble coordinates.
-- **Advanced OCR Engines**: 
-  - **Manga-OCR** for highly accurate Japanese vertical/horizontal handwriting and manga fonts.
-  - **EasyOCR** for English, Chinese, and Korean text.
-- **Dual Translation Engines**:
-  - **Google Translate** (default, free, no-key required).
-  - **Google Gemini AI** (Gemini 1.5 Flash) for natural, contextual translations. Fully compatible with Google's new `AQ.` authentication key formats.
-- **Batch Translation Optimization**: Dialogue bubbles are batched into a single API request, reducing Gemini API latency and costs by up to 90%.
-- **Smart Hyphenation & Spacing**:
-  - Syllabic hyphenation using `pyphen` (supporting Indonesian and English language rules).
-  - **Length Guard**: Words with **5 letters or fewer** (e.g. *makan, sabun, baju*) are protected from hyphenation to keep dialogue natural.
-- **Dynamic Text Backgrounds**:
-  - The white background behind translated text dynamically snaps to the size of the YOLOv5 detection box.
-  - If text overflows, the background expands with a tight, professional 3px padding.
-- **Translation History Dashboard**:
-  - Saves your past translations locally using browser `localStorage` (lightweight storage using image URLs served by the backend).
-  - Toggle between **Grid (Card) View** and **List View**.
-  - **Floating Reader Modal**: Click any card in the history to open a glassmorphic overlay displaying the original and translated comic pages side-by-side.
-- **Refactored Architecture**: Modularized page layout using React Router and clean design tokens.
+A local web application for translating text inside comic and manga image pages. You upload one or more pages through the browser, select the source and target languages, and the local Python backend detects speech bubbles with YOLOv5, extracts text using Manga-OCR or EasyOCR, translates the dialogue using Google Translate or the Google Gemini API, and draws the translated text back onto the images. Results can be viewed side by side in the browser, reviewed later from the history page, or exported as a single PDF file.
 
 ---
 
-## 🛠️ Technology Stack
+## Supported Languages & Translation Engines
 
-- **Frontend**: React (Vite), Tailwind CSS (v4), React Router, Lucide Icons, jsPDF.
-- **Backend**: Flask, PyTorch (YOLOv5), Manga-OCR, EasyOCR, Pillow, Pyphen.
+- **Source languages**: Japanese (`jp`), Korean (`ko`), Simplified Chinese (`ch_sim`), English (`en`)
+- **Target languages**: Indonesian (`id`), English (`en`)
+- **Translation engines**:
+  - **Google Translate** (default, requires no API key)
+  - **Google Gemini API** (requires an API key from [Google AI Studio](https://aistudio.google.com/))
+
+---
+
+## Prerequisites
+
+- **Python 3.9+** and `pip`
+- **Node.js 18+** and `npm`
+- **Git** (used by `torch.hub.load` to fetch the `ultralytics/yolov5` repository)
+- **Internet connection** (required when starting the backend to load YOLOv5 via PyTorch Hub, when downloading OCR models on first run, and when calling translation services)
+- *(Optional)* An NVIDIA GPU with CUDA support for PyTorch and OCR execution (falls back to CPU when unavailable)
 
 ---
 
-## 🚀 Setup & Installation
+## Setup & Installation
 
-Follow these steps to run the application on your local machine.
-
-### Prerequisites
-
-- **Python 3.9** or higher installed.
-- **Node.js 18** or higher installed.
-- (Optional) CUDA-compatible GPU for faster YOLO and OCR processing (defaults to CPU if unavailable).
-
----
+The application consists of two processes that run locally: a **Python Flask backend** and a **React (Vite) frontend**.
 
 ### 1. Backend Setup
 
-1. Open your terminal and navigate to the `backend/` directory:
+1. Open a terminal and change into the `backend` directory:
    ```bash
    cd backend
    ```
+   > **Note**: Keep `backend/` as your working directory when running the server, as the backend resolves model, font, and storage paths relative to this folder.
 
-2. Create a Python virtual environment:
-   ```bash
-   python -m venv .venv
-   ```
-
-3. Activate the virtual environment:
-   * **Windows (PowerShell)**:
+2. Create and activate a Python virtual environment:
+   - **Windows (PowerShell)**:
      ```powershell
+     python -m venv .venv
      .venv\Scripts\Activate.ps1
      ```
-   * **macOS / Linux**:
+   - **macOS / Linux**:
      ```bash
+     python3 -m venv .venv
      source .venv/bin/activate
      ```
 
-4. Install the required dependencies:
+3. Install the Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-   *Note: Installing `torch` (PyTorch) might take a few minutes depending on your internet connection.*
 
-5. Ensure the YOLOv5 weights (`best.pt`) are located in the path:
-   `backend/yolo-model/bubble-detector-new/weights/best.pt`
+4. Verify that the YOLOv5 weights file exists at:
+   ```text
+   backend/yolo-model/bubble-detector-new/weights/best.pt
+   ```
 
-6. Start the Flask backend server:
+5. Start the Flask backend server:
    ```bash
    python app.py
    ```
-   The backend will start running at `http://127.0.0.1:5000`.
+   The backend listens on `http://127.0.0.1:5000`. On the first run for a given language, Manga-OCR or EasyOCR will download its model weights to your local cache directory.
 
 ---
 
 ### 2. Frontend Setup
 
-1. Open a new terminal and navigate to the `frontend/` directory:
+1. Open a second terminal and change into the `frontend` directory:
    ```bash
    cd frontend
    ```
 
-2. Install the node dependencies:
+2. Install the Node.js dependencies:
    ```bash
    npm install
    ```
 
-3. Start the Vite React development server:
+3. Start the Vite development server:
    ```bash
    npm run dev
    ```
 
-4. Open your browser and navigate to the URL shown in the terminal (usually `http://localhost:5173`).
+4. Open the local URL shown in the terminal (by default `http://localhost:5173`) in your web browser.
 
 ---
 
-## 📖 How to Use
+## How to Use
 
-1. **Upload Images**: Click the **UPLOAD GAMBAR** button on the Home page and select one or more comic/manga pages.
-2. **Choose Languages**: Select the source language (Japanese, English, Korean, or Chinese) and the target language (Indonesian or English).
-3. **Select Translation Engine**:
-   - Go to the **Settings** page via the Navbar.
-   - Choose between **Google Translate** or **Google Gemini AI**.
-   - If using Gemini, enter your Gemini API Key (obtained for free from [Google AI Studio](https://aistudio.google.com/)) and click **SIMPAN PENGATURAN**.
-4. **Translate**: Click **Terjemahkan** on the Home page. The progress will update in real time.
-5. **View History**: Read through old translations on the **History** page, search for them, or view them side-by-side in the floating modal reader.
-6. **Download**: Once processed, click **DOWNLOAD PDF** to compile your translated comic pages into a single PDF document.
+> **Note**: Navigation links are labeled in English (`Home`, `History`, `Settings`), while buttons and form labels inside the pages are displayed in Indonesian.
 
----
-
-## 📂 Project Structure
-
-```
-scan-translator-v2/
-├── backend/
-│   ├── app.py                # Flask API routes
-│   ├── image_processor.py    # YOLOv5, OCR, batch translation, Pillow renderer
-│   ├── requirements.txt      # Python dependencies
-│   └── static/               
-│       ├── fonts/            # Manga Fonts (WinkyRough, TradeWinds)
-│       └── uploads/          # Saved source and output images
-├── frontend/
-│   ├── package.json          # Node dependencies and scripts
-│   ├── src/
-│   │   ├── components/
-│   │   │   └── Navbar.jsx    # Centered logo glassmorphic navigation
-│   │   ├── pages/
-│   │   │   ├── Home.jsx      # Translation panel & layout
-│   │   │   ├── History.jsx   # List/Card toggler & reading modal
-│   │   │   └── Settings.jsx  # Engine & API Key configurations
-│   │   ├── App.jsx           # React router orchestration
-│   │   └── index.css         # Custom typography & Tailwind imports
-```
+1. **Choose a translation engine (optional)**:
+   - Open **Settings** from the top navigation bar.
+   - Select either **Google Translate (Gratis & Default)** or **Google Gemini AI**.
+   - If you select Google Gemini AI, paste your API key from [Google AI Studio](https://aistudio.google.com/) and click **SIMPAN PENGATURAN**. Your selection and key are stored in your browser's `localStorage`.
+2. **Upload comic pages**:
+   - On the **Home** page, click **UPLOAD GAMBAR** and select one or more image files.
+3. **Select languages**:
+   - Choose the source language from the left dropdown (`Bahasa Jepang`, `Bahasa Korea`, `Bahasa Mandarin`, or `Bahasa Inggris`).
+   - Choose the target language from the right dropdown (`Bahasa Indonesia` or `Bahasa Inggris`).
+4. **Run translation**:
+   - Click **Terjemahkan**. The status box displays elapsed processing time until the backend responds.
+   - Once complete, each page is shown side by side under **Asli** (original) and **Terjemahan** (translated).
+5. **Export to PDF**:
+   - After results appear, click **DOWNLOAD PDF** to combine the translated images into a single `hasil_gambar.pdf` file.
+6. **View or clear history**:
+   - Open **History** to browse past translation sessions saved on the backend.
+   - Toggle between grid and list layouts, click any entry to open a side-by-side modal view, or click **Hapus Semua** to clear the saved history and delete uploaded/output image files from `backend/static/uploads/`.
 
 ---
 
-## 🤝 Contributing
+## Troubleshooting
 
-Contributions, issues, and feature requests are welcome! Feel free to open issues or pull requests to improve translation layouting, bubble detection accuracy, or UI customization.
+- **`NotImplementedError: cannot instantiate 'WindowsPath' on your system` (Linux / macOS)**:
+  Line 19 of `backend/image_processor.py` sets `pathlib.PosixPath = pathlib.WindowsPath` so YOLOv5 weights trained on Linux can load on Windows. On Linux or macOS, remove or comment out that line (or guard it with `if os.name == 'nt':`).
+- **Frontend cannot reach the backend**:
+  The frontend sends requests directly to `http://127.0.0.1:5000`. Make sure `python app.py` is running from the `backend/` directory before starting a translation.
+- **Google Gemini rate limits (`HTTP 429`)**:
+  Free-tier Gemini API keys have per-minute and per-day request limits. The backend waits and retries once on temporary `429`/`503` responses, and falls back to Google Translate for bubbles that were not returned by Gemini (including when the daily quota is exceeded).
+
+---
+
+## Technical Documentation
+
+For developers looking for the system architecture, 3-phase processing pipeline, typesetting logic, REST API reference, and known codebase limitations, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

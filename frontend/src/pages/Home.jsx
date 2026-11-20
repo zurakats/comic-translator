@@ -93,18 +93,6 @@ const Home = () => {
 
       setResults(data.results);
 
-      // Save to local storage history
-      const currentHistory = JSON.parse(localStorage.getItem('translationHistory') || '[]');
-      const newHistoryItem = {
-        id: Date.now(),
-        date: new Date().toLocaleString(),
-        sourceLang,
-        targetLang,
-        engine,
-        images: data.results
-      };
-      localStorage.setItem('translationHistory', JSON.stringify([newHistoryItem, ...currentHistory]));
-
       const elapsedSeconds = Math.floor((Date.now() - startTimeRef.current) / 1000);
       stopTimer();
       setStatusText(`Proses terjemahan selesai! \nMemakan waktu: ${elapsedSeconds} detik`);

@@ -21,17 +21,17 @@ const Settings = () => {
   };
 
   return (
-    <div className="flex flex-col w-full min-h-[calc(100vh-80px)] items-center font-winky bg-brand-dark relative py-10">
+    <div className="flex flex-col w-full min-h-[calc(100vh-80px)] items-center font-winky bg-brand-dark relative py-10 px-4">
 
       {/* Background Hero */}
-      <div className="hero absolute top-0 left-0 -z-10 h-full w-full overflow-hidden flex items-center justify-center pointer-events-none opacity-20">
-        <img src="/assets/hero-banner (2).jpg" alt="manga" className="object-cover h-full" />
-        <img src="/assets/hero-banner (3).jpg" alt="manga" className="object-cover h-full" />
-        <img src="/assets/hero-banner (1).jpg" alt="manga" className="object-cover h-full" />
+      <div className="absolute inset-0 -z-10 overflow-hidden flex items-center justify-center pointer-events-none opacity-20">
+        <img src="/assets/hero-banner (2).jpg" alt="manga" className="object-cover w-full h-full" />
+        <img src="/assets/hero-banner (3).jpg" alt="manga" className="object-cover w-full h-full" />
+        <img src="/assets/hero-banner (1).jpg" alt="manga" className="object-cover w-full h-full" />
       </div>
 
       {/* Settings Card */}
-      <div className="w-full max-w-[600px] mt-10 bg-black/60 backdrop-blur-lg p-10 rounded-2xl border border-white/10 shadow-2xl flex flex-col gap-8 z-10">
+      <div className="w-full max-w-[600px] my-auto bg-black/60 backdrop-blur-lg p-10 rounded-2xl border border-white/10 shadow-2xl flex flex-col gap-8 z-10">
 
         <div className="flex items-center gap-3 border-b border-white/10 pb-4">
           <Settings2 size={28} className="text-brand-blue-hover" />
