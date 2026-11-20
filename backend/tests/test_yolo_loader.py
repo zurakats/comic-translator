@@ -154,6 +154,34 @@ class TestYoloLoader(unittest.TestCase):
         kw = {k.arg: ast.literal_eval(k.value) for k in app_run_calls[0].keywords if k.arg}
         self.assertIs(kw.get("use_reloader"), False)
 
+    def test_app_warms_up_yolo_in_main_block_before_run(self):
+        app_path = os.path.join(BACKEND_DIR, "app.py")
+        with open(app_path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=app_path)
+
+        main_blocks = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Name)
+            and node.test.left.id == "__name__"
+        ]
+        self.assertEqual(len(main_blocks), 1)
+
+        call_names = []
+        for stmt in main_blocks[0].body:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name):
+                        call_names.append(node.func.id)
+                    elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                        call_names.append(f"{node.func.value.id}.{node.func.attr}")
+
+        self.assertIn("get_yolo_model", call_names)
+        self.assertIn("app.run", call_names)
+        self.assertLess(call_names.index("get_yolo_model"), call_names.index("app.run"))
+
 
 if __name__ == "__main__":
     unittest.main()

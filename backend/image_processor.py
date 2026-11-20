@@ -1,5 +1,6 @@
 import asyncio
 from collections import OrderedDict
+from functools import lru_cache
 import os
 import threading
 import cv2
@@ -237,10 +238,14 @@ def batch_google_translate(bubbles, source_lang, target_lang, existing_translati
 
     return translations
 
-def break_word(word, draw, font, max_width, target_lang):
-    if len(word) <= 5:
-        return [word]
+@lru_cache(maxsize=256)
+def get_font(font_path, font_size):
+    """Load and cache TrueType font objects across bubbles and pages."""
+    return ImageFont.truetype(font_path, font_size)
 
+@lru_cache(maxsize=2048)
+def _split_syllables(word, target_lang):
+    """Split a word into hyphenation syllables and cache the result."""
     if target_lang == 'id':
         dic = dic_id
     elif target_lang == 'en':
@@ -255,6 +260,13 @@ def break_word(word, draw, font, max_width, target_lang):
 
     if len(syllables) <= 1 and len(word) > 3:
         syllables = list(word)
+    return tuple(syllables)
+
+def break_word(word, draw, font, max_width, target_lang):
+    if len(word) <= 5:
+        return [word]
+
+    syllables = _split_syllables(word, target_lang)
 
     lines = []
     current_part = ""
@@ -303,27 +315,41 @@ def wrap_text(text, draw, font, max_width, target_lang):
         lines.append(current_line)
     return lines
 
-def extract_bubbles(image_path, ocr, index, translate_code, image_id):
+def extract_bubbles(image_path, ocr, index, translate_code, image_id, timings=None):
     # YOLO + OCR
+    t_read0 = time.perf_counter()
     img_cv = cv2.imread(image_path)
-    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-    img_pil = Image.fromarray(img_rgb)
-    draw = ImageDraw.Draw(img_pil)
+    if img_cv is None:
+        raise ValueError(f"Failed to read image: {image_path}")
+    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB, dst=img_cv)
+    height, width = img_rgb.shape[:2]
+    t_read = time.perf_counter() - t_read0
 
-    results = get_yolo_model()(img_rgb)
-    detections = results.pandas().xyxy[0]
+    t_yolo0 = time.perf_counter()
+    with torch.inference_mode():
+        results = get_yolo_model()(img_rgb)
+    detections = results.xyxy[0][:, :4].tolist()
+    t_yolo = time.perf_counter() - t_yolo0
 
+    img_pil = Image.fromarray(img_rgb) if index == 0 else None
     bubbles = []
-    for bubble_idx, (_, row) in enumerate(detections.iterrows()):
-        x1, y1, x2, y2 = map(lambda x: int(round(x)), [row['xmin'], row['ymin'], row['xmax'], row['ymax']])
+    t_ocr0 = time.perf_counter()
+    for bubble_idx, box in enumerate(detections):
+        x1, y1, x2, y2 = (int(round(v)) for v in box)
+        x1 = max(0, min(width, x1))
+        y1 = max(0, min(height, y1))
+        x2 = max(0, min(width, x2))
+        y2 = max(0, min(height, y2))
         orig_box_width = x2 - x1
         orig_box_height = y2 - y1
-        cropped = img_pil.crop((x1, y1, x2, y2))
 
-        if index == 0:
+        if orig_box_width <= 0 or orig_box_height <= 0:
+            text = ""
+        elif index == 0:
+            cropped = img_pil.crop((x1, y1, x2, y2))
             text = ocr(cropped) or ""
         else:
-            cropped_np = np.array(cropped)
+            cropped_np = img_rgb[y1:y2, x1:x2]
             result = ocr.readtext(cropped_np, detail=0)
             text = " ".join(result) or ""
 
@@ -337,11 +363,40 @@ def extract_bubbles(image_path, ocr, index, translate_code, image_id):
             "ocr_text": text,
             "cleaned_text": cleaned_text,
         })
+    t_ocr = time.perf_counter() - t_ocr0
 
-    return img_pil, draw, bubbles
+    if img_pil is None:
+        img_pil = Image.fromarray(img_rgb)
 
-def render_bubbles(img_pil, draw, bubbles, translations, targetLang,
-                    font_path="static/fonts/Winky_Rough/WinkyRough-Regular.ttf"):
+    if timings is not None:
+        timings["read"] = timings.get("read", 0.0) + t_read
+        timings["yolo"] = timings.get("yolo", 0.0) + t_yolo
+        timings["ocr"] = timings.get("ocr", 0.0) + t_ocr
+
+    return img_pil, bubbles
+
+def _measure_lines(translated, draw, font, avail_width, target_lang, line_height):
+    """Wrap translated text and compute per-line widths and total block dimensions."""
+    lines = wrap_text(translated, draw, font, avail_width, target_lang)
+    total_height = line_height * len(lines)
+    line_widths = []
+    max_line_width = 0
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        line_widths.append(w)
+        if w > max_line_width:
+            max_line_width = w
+    return lines, line_widths, total_height, max_line_width
+
+def render_bubbles(img_pil, bubbles, translations, targetLang,
+                    font_path="static/fonts/Winky_Rough/WinkyRough-Regular.ttf",
+                    draw=None):
+    if not bubbles:
+        return
+    if draw is None:
+        draw = ImageDraw.Draw(img_pil)
+    line_spacing_factor = 1.05
     for b in bubbles:
         cleaned_text = b["cleaned_text"]
         if cleaned_text.strip():
@@ -365,35 +420,34 @@ def render_bubbles(img_pil, draw, bubbles, translations, targetLang,
         avail_width = max(10, text_box_width)
         avail_height = max(10, box_height - 4)
 
+        has_words = bool(translated.split())
+        fitted = None
         font_size = 110
         while font_size > 12:
-            font = ImageFont.truetype(font_path, font_size)
-            lines = wrap_text(translated, draw, font, avail_width, targetLang)
-            line_spacing_factor = 1.05
-
+            font = get_font(font_path, font_size)
             ascent, descent = font.getmetrics()
             line_height = int((ascent + descent) * line_spacing_factor)
-            total_height = line_height * len(lines)
+            if has_words and line_height > avail_height:
+                font_size -= 1
+                continue
 
-            max_line_width = 0
-            for line in lines:
-                bbox = draw.textbbox((0, 0), line, font=font)
-                w = bbox[2] - bbox[0]
-                if w > max_line_width:
-                    max_line_width = w
-
+            lines, line_widths, total_height, max_line_width = _measure_lines(
+                translated, draw, font, avail_width, targetLang, line_height
+            )
             if total_height <= avail_height and max_line_width <= avail_width:
+                fitted = (font, lines, line_widths, line_height, total_height)
                 break
             font_size -= 1
 
-        # Font size is kept at 1.0x of the calculated fit so text NEVER spills vertically outside YOLOv5 box
-        font_size = int(font_size * 1.0)
-
-        font = ImageFont.truetype(font_path, font_size)
-        lines = wrap_text(translated, draw, font, avail_width, targetLang)
-        ascent, descent = font.getmetrics()
-        line_height = int((ascent + descent) * 1.05)
-        total_height = line_height * len(lines)
+        if fitted is None:
+            font = get_font(font_path, 12)
+            ascent, descent = font.getmetrics()
+            line_height = int((ascent + descent) * line_spacing_factor)
+            lines, line_widths, total_height, _ = _measure_lines(
+                translated, draw, font, avail_width, targetLang, line_height
+            )
+        else:
+            font, lines, line_widths, line_height, total_height = fitted
 
         # Inset by ~1.5% (min 1px) so the background fits 100% snugly inside the YOLOv5 detection box
         inset_x = max(1, int(box_width * 0.015))
@@ -407,9 +461,7 @@ def render_bubbles(img_pil, draw, bubbles, translations, targetLang,
         draw.rectangle([rect_x1, rect_y1, rect_x2, rect_y2], fill="white")
 
         current_y = y1 + (box_height - total_height) // 2
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font)
-            line_width = bbox[2] - bbox[0]
+        for line, line_width in zip(lines, line_widths):
             text_x = x1 + (box_width - line_width) // 2
             draw.text(
                 (text_x, current_y), 
