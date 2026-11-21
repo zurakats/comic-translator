@@ -52,20 +52,11 @@ main {
     font-size: 1.5em;
 }
 
-#imageInfo {
-    font-size: 18px;
-    color: #ffffff;
-    background-color: rgba(0, 0, 0, 0.6);
-    padding: 10px;
-    z-index: 10;
-    border-radius: 5px;
-    text-align: center;
-}
-
 .hero {
     position: absolute;
     top: 0;
     height: 100vh;
+    height: 100dvh;
     width: 100%;
     overflow: hidden;
     display: flex;
