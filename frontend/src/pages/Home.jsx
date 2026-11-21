@@ -1,28 +1,21 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
 import { Download, Upload, RefreshCw } from 'lucide-react';
+import ComicBatchViewer from '../components/ComicBatchViewer';
+import Footer from '../components/Footer';
 
 const Home = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [sourceLang, setSourceLang] = useState('');
   const [targetLang, setTargetLang] = useState('');
-  const [statusText, setStatusText] = useState('Image Info');
+  const [statusText, setStatusText] = useState('Upload comic pages to get started');
   const [statusColor, setStatusColor] = useState('rgba(0, 0, 0, 0.6)');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [results, setResults] = useState([]); 
-  
+  const [results, setResults] = useState([]);
+  const [resultBatchKey, setResultBatchKey] = useState(0);
+
   const timerRef = useRef(null);
   const startTimeRef = useRef(null);
-
-  const startTimer = () => {
-    if (!timerRef.current) {
-      startTimeRef.current = Date.now();
-      timerRef.current = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-        setStatusText(`Memproses gambar: ${elapsed} detik`);
-      }, 1000);
-    }
-  };
 
   const stopTimer = () => {
     if (timerRef.current) {
@@ -31,25 +24,41 @@ const Home = () => {
     }
   };
 
+  useEffect(() => {
+    return () => stopTimer();
+  }, []);
+
+  const startTimer = () => {
+    if (!timerRef.current) {
+      startTimeRef.current = Date.now();
+      timerRef.current = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+        setStatusText(`Processing images: ${elapsed}s`);
+      }, 1000);
+    }
+  };
+
   const handleUpload = (e) => {
     const files = e.target.files;
     if (files && files.length > 0) {
       const fileArray = Array.from(files);
       setSelectedFiles(fileArray);
-      setStatusText(`Jumlah gambar yang diunggah: ${fileArray.length}`);
+      setStatusText(
+        `${fileArray.length} ${fileArray.length === 1 ? 'image' : 'images'} selected`
+      );
       setStatusColor('rgba(0, 0, 0, 0.6)');
       setResults([]);
     }
-    e.target.value = null; 
+    e.target.value = null;
   };
 
   const translateImage = async () => {
     if (selectedFiles.length === 0) {
-      alert('Upload gambar dulu sebelum menerjemahkan!');
+      alert('Please upload at least one image before translating.');
       return;
     }
     if (!sourceLang || !targetLang) {
-      alert('Pilih bahasa sumber dan bahasa target!');
+      alert('Please select both a source language and a target language.');
       return;
     }
 
@@ -57,14 +66,14 @@ const Home = () => {
     const apiKey = localStorage.getItem('geminiApiKey') || '';
 
     if (engine === 'gemini' && !apiKey) {
-      alert('API Key Gemini belum diatur. Silakan isi di menu Settings.');
+      alert('Gemini API key is not set. Please configure it in Settings.');
       return;
     }
 
     setIsProcessing(true);
     startTimer();
     setStatusColor('rgba(0, 0, 0, 0.6)');
-    setStatusText('Sedang memproses...');
+    setStatusText('Processing...');
 
     const formData = new FormData();
     selectedFiles.forEach((file) => {
@@ -88,20 +97,23 @@ const Home = () => {
       const data = await response.json();
 
       if (!data.results || data.results.length === 0) {
-        throw new Error('Hasil terjemahan kosong.');
+        throw new Error('Translation returned no results.');
       }
 
       setResults(data.results);
+      setResultBatchKey((prev) => prev + 1);
 
       const elapsedSeconds = Math.floor((Date.now() - startTimeRef.current) / 1000);
       stopTimer();
-      setStatusText(`Proses terjemahan selesai! \nMemakan waktu: ${elapsedSeconds} detik`);
+      setStatusText(`Translation complete!\nTime elapsed: ${elapsedSeconds}s`);
       setStatusColor('rgba(0, 128, 0, 0.6)');
     } catch (err) {
       stopTimer();
-      setStatusText('Terjadi kesalahan!');
+      setStatusText('An error occurred!');
       setStatusColor('rgba(255, 0, 0, 0.6)');
-      alert('Gagal memproses gambar. Pastikan server backend menyala dan kunci API valid.');
+      alert(
+        'Failed to process images. Please make sure the backend server is running and your API key is valid.'
+      );
       console.error(err);
     } finally {
       setIsProcessing(false);
@@ -109,9 +121,9 @@ const Home = () => {
   };
 
   const downloadPDF = async () => {
-    const imageUrls = results.map(r => r.translated).filter(url => url);
+    const imageUrls = results.map((r) => r.translated).filter(Boolean);
     if (!imageUrls || imageUrls.length === 0) {
-      alert('Belum ada gambar untuk diunduh!');
+      alert('No translated images available to download.');
       return;
     }
 
@@ -143,15 +155,15 @@ const Home = () => {
       pdf.addImage(img, 'JPEG', x, y, w, h);
     });
 
-    pdf.save('hasil_gambar.pdf');
+    pdf.save('translated_comic.pdf');
   };
 
   return (
     <>
-      <div className="flex flex-col w-full min-h-[calc(100vh-80px)] justify-center gap-[20px] items-center z-10 relative py-[40px] font-winky">
+      <div className="flex flex-col w-full min-h-[calc(100vh-80px)] shrink-0 justify-center gap-4 sm:gap-5 items-center z-10 relative py-6 sm:py-10 px-4 font-winky">
         <label
           id="imageInfo"
-          className="mb-5 text-white text-center rounded-lg px-6 py-3 min-w-[300px]"
+          className="w-full max-w-[340px] md:max-w-[400px] mb-2 sm:mb-5 text-white text-center rounded-lg px-6 py-3"
           style={{ backgroundColor: statusColor, whiteSpace: 'pre-line' }}
         >
           {statusText}
@@ -166,32 +178,34 @@ const Home = () => {
           onChange={handleUpload}
           disabled={isProcessing}
         />
-        
+
         <label
           htmlFor="imageInput"
-          className="w-[300px] md:w-[400px] h-[71px] flex gap-2 items-center justify-center bg-brand-dark text-[24px] md:text-[28px] border-[3px] border-brand-dark rounded-[5px] text-white transition-colors duration-300 ease-out hover:bg-white hover:text-brand-dark cursor-pointer text-center leading-none mt-2 shadow-lg"
-          style={{ pointerEvents: isProcessing ? 'none' : 'auto', opacity: isProcessing ? 0.5 : 1 }}
+          className="w-full max-w-[340px] md:max-w-[400px] h-[71px] flex gap-2 items-center justify-center bg-brand-dark text-[22px] sm:text-[24px] md:text-[28px] border-[3px] border-brand-dark rounded-[5px] text-white transition-colors duration-300 ease-out hover:bg-white hover:text-brand-dark cursor-pointer text-center leading-none mt-2 shadow-lg"
+          style={{
+            pointerEvents: isProcessing ? 'none' : 'auto',
+            opacity: isProcessing ? 0.5 : 1,
+          }}
         >
-          <Upload /> UPLOAD GAMBAR
+          <Upload /> UPLOAD IMAGES
         </label>
 
-        <div className="flex flex-col md:flex-row gap-[15px] items-center my-[10px]">
+        <div className="w-full md:w-auto flex flex-col md:flex-row gap-[15px] items-center justify-center my-[10px]">
           <select
             id="source-lang"
             value={sourceLang}
             onChange={(e) => setSourceLang(e.target.value)}
             disabled={isProcessing}
-            style={{ padding: '0 15px' }}
-            className="h-[55px] w-[300px] md:w-[250px] text-[18px] bg-white border-2 border-brand-blue rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-all duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
+            className="h-[55px] w-full max-w-[340px] md:w-[250px] px-4 text-[18px] bg-white border-2 border-brand-blue rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-all duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
           >
-            <option value="">- pilih bahasa -</option>
-            <option value="jp">Bahasa Jepang</option>
-            <option value="ko">Bahasa Korea</option>
-            <option value="ch_sim">Bahasa Mandarin</option>
-            <option value="en">Bahasa Inggris</option>
+            <option value="">- Source Language -</option>
+            <option value="jp">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="ch_sim">Chinese (Simplified)</option>
+            <option value="en">English</option>
           </select>
 
-          <div className="flex items-center justify-center w-[40px] h-[40px] bg-brand-blue text-white rounded-full shadow-md rotate-90 md:rotate-0 transition-transform hover:scale-110">
+          <div className="flex items-center justify-center w-[40px] h-[40px] bg-brand-blue text-white rounded-full shadow-md rotate-90 md:rotate-0 transition-transform hover:scale-110 shrink-0">
             <RefreshCw size={20} />
           </div>
 
@@ -200,36 +214,23 @@ const Home = () => {
             value={targetLang}
             onChange={(e) => setTargetLang(e.target.value)}
             disabled={isProcessing}
-            style={{ padding: '0 15px' }}
-            className="h-[55px] w-[300px] md:w-[250px] text-[18px] bg-white border-2 border-brand-blue rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-all duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
+            className="h-[55px] w-full max-w-[340px] md:w-[250px] px-4 text-[18px] bg-white border-2 border-brand-blue rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-all duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
           >
-            <option value="">- pilih bahasa -</option>
-            <option value="id">Bahasa Indonesia</option>
-            <option value="en">Bahasa Inggris</option>
+            <option value="">- Target Language -</option>
+            <option value="id">Indonesian</option>
+            <option value="en">English</option>
           </select>
         </div>
 
         <button
+          type="button"
           id="button-translate"
           onClick={translateImage}
           disabled={isProcessing}
-          className="w-[300px] md:w-[200px] h-[53px] text-[18px] bg-brand-blue border-2 border-brand-blue rounded-[5px] shadow-[4px_4px_4px_rgba(0,0,0,0.3)] cursor-pointer text-white transition-colors duration-300 ease-out hover:bg-white hover:text-brand-blue-hover hover:border-brand-blue disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full max-w-[340px] md:w-[220px] h-[53px] text-[18px] bg-brand-blue border-2 border-brand-blue rounded-[5px] shadow-[4px_4px_4px_rgba(0,0,0,0.3)] cursor-pointer text-white transition-colors duration-300 ease-out hover:bg-white hover:text-brand-blue-hover hover:border-brand-blue disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {isProcessing ? 'Memproses...' : 'Terjemahkan'}
+          {isProcessing ? 'Processing...' : 'Translate'}
         </button>
-
-        {results.length > 0 && (
-          <button
-            id="downloadPdfBtn"
-            onClick={downloadPDF}
-            disabled={isProcessing}
-            style={{ padding: '15px 30px', margin: '20px 0' }}
-            className="flex items-center justify-center gap-3 text-lg tracking-widest bg-brand-dark text-white border-4 border-brand-dark rounded-xl shadow-lg cursor-pointer transition-all duration-300 ease-out hover:bg-white hover:text-brand-dark hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Download />
-            <span>DOWNLOAD PDF</span>
-          </button>
-        )}
       </div>
 
       {/* Hero Background */}
@@ -241,24 +242,30 @@ const Home = () => {
 
       {/* Results Section */}
       {results.length > 0 && (
-        <div className="bg-brand-dark w-full py-10 flex flex-col items-center justify-center shadow-inner z-20 relative">
-          <div className="flex flex-col items-center w-full max-w-[1600px] px-4 gap-12">
-            {results.map((result, index) => (
-              <div key={index} className="flex flex-col xl:flex-row justify-center items-center gap-8 w-full">
-                <div className="w-full max-w-[720px] p-[20px] bg-black rounded-[10px] flex flex-col gap-[10px] shadow-lg">
-                  <p className="text-white text-center text-xl font-bold">Asli</p>
-                  <img src={result.original} alt={`Original ${index + 1}`} className="w-full h-auto object-contain mx-auto rounded-lg" />
-                </div>
-                <div className="w-full max-w-[720px] p-[20px] bg-black rounded-[10px] flex flex-col gap-[10px] shadow-lg">
-                  <p className="text-white text-center text-xl font-bold">Terjemahan</p>
-                  {result.translated && (
-                    <img src={result.translated} alt={`Translated ${index + 1}`} className="w-full h-auto object-contain mx-auto rounded-lg" />
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <>
+          <section className="bg-brand-dark w-full pt-3 pb-0 px-0 lg:py-8 lg:px-4 flex flex-col items-center justify-center shadow-inner z-20 relative border-t border-white/10">
+            <div className="w-full max-w-[1600px]">
+              <ComicBatchViewer
+                key={resultBatchKey}
+                images={results}
+                stickyTopClass="top-[88px]"
+                headerAction={
+                  <button
+                    type="button"
+                    id="downloadPdfBtn"
+                    onClick={downloadPDF}
+                    disabled={isProcessing}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold tracking-wide bg-black/70 text-white border border-white/20 rounded-lg shadow-md cursor-pointer transition-all duration-200 hover:bg-brand-blue hover:border-brand-blue disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Download size={16} />
+                    <span>Download PDF</span>
+                  </button>
+                }
+              />
+            </div>
+          </section>
+          <Footer />
+        </>
       )}
     </>
   );
