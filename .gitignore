@@ -3,6 +3,7 @@ backend/.venv/
 backend/__pycache__/
 backend/static/uploads
 backend/static/history.json
+backend/static/settings.json
 *.pyc
 
 # Node
@@ -21,3 +22,6 @@ frontend/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# MarkdownORMANCE.md
+PERFORMANCE_AUDIT.md

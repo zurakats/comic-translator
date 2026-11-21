@@ -9,11 +9,11 @@ import './index.css';
 function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen relative font-winky overflow-x-hidden bg-brand-dark isolate">
+      <div className="min-h-screen flex flex-col relative font-winky overflow-x-clip bg-brand-dark isolate">
         <Navbar />
-        
+
         {/* Main Content wrapper with padding to account for fixed navbar */}
-        <main className="pt-[80px]">
+        <main className="pt-[80px] flex-1 flex flex-col">
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/history" element={<History />} />
