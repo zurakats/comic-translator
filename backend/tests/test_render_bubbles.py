@@ -221,9 +221,9 @@ class TestRenderBubblesOptimization(unittest.TestCase):
         called_wide = []
         orig_wrap = self.ip.wrap_text
 
-        def spy_wrap_wide(text, draw, font, max_width, target_lang):
-            called_wide.append(font.size)
-            return orig_wrap(text, draw, font, max_width, target_lang)
+        def spy_wrap_wide(*args, **kwargs):
+            called_wide.append(args[2].size)
+            return orig_wrap(*args, **kwargs)
 
         with patch.object(self.ip, "wrap_text", side_effect=spy_wrap_wide):
             self.ip.render_bubbles(img_wide, wide_bubbles, {"mid": "Halo dunia!"}, "id", font_path=self.font_path)
@@ -236,9 +236,9 @@ class TestRenderBubblesOptimization(unittest.TestCase):
         narrow_bubbles = [_make_bubble("narrow", 20, 20, 120, 80, "text")]
         called_narrow = []
 
-        def spy_wrap_narrow(text, draw, font, max_width, target_lang):
-            called_narrow.append(font.size)
-            return orig_wrap(text, draw, font, max_width, target_lang)
+        def spy_wrap_narrow(*args, **kwargs):
+            called_narrow.append(args[2].size)
+            return orig_wrap(*args, **kwargs)
 
         with patch.object(self.ip, "wrap_text", side_effect=spy_wrap_narrow):
             self.ip.render_bubbles(
@@ -283,6 +283,79 @@ class TestRenderBubblesOptimization(unittest.TestCase):
         after_rect = events[rect_idx + 1 :]
         self.assertGreater(len(after_rect), 0)
         self.assertTrue(all(ev == "text" for ev in after_rect))
+
+    def test_pixel_exact_equivalence_tall_narrow_manga_bubbles(self):
+        tall_cases = [
+            ("id", 70, 300, "Kau pikir aku akan menyerah begitu saja menghadapi iblis sekuat dirimu?!"),
+            ("id", 90, 340, "Pertanggungjawaban ketidakberdayaan mereka bukan urusanku lagi sekarang."),
+            ("id", 60, 140, "Hei, tunggu sebentar! Jangan gegabah!"),
+            ("id", 100, 420, "Berkonsentrasilah! Dengarkan suara benang celah itu!"),
+            ("en", 80, 320, "Unbelievably extraordinary determination against overwhelming odds!"),
+        ]
+        for idx, (target_lang, w, h, text) in enumerate(tall_cases):
+            with self.subTest(case=idx, size=(w, h), target_lang=target_lang):
+                bubbles = [_make_bubble(f"tall_{idx}", 20, 20, 20 + w, 20 + h, "text")]
+                translations = {f"tall_{idx}": text}
+
+                img_expected = Image.new("RGB", (220, 480), (30, 50, 70))
+                img_actual = img_expected.copy()
+
+                _legacy_render_bubbles(
+                    self.ip, img_expected, bubbles, translations, target_lang, self.font_path
+                )
+                self.ip.render_bubbles(
+                    img_actual, bubbles, translations, target_lang, font_path=self.font_path
+                )
+
+                self.assertTrue(
+                    np.array_equal(np.array(img_expected), np.array(img_actual)),
+                    f"Tall narrow manga bubble diverged for case {idx} ({w}x{h})",
+                )
+
+    def test_fast_reject_early_exit_and_backward_compatible_helpers(self):
+        # 1. Narrow tall bubble with an unbreakable word (len <= 5): fast-rejected before wrap_text at font_size=110
+        img_fast = Image.new("RGB", (200, 400), "black")
+        tall_narrow = [_make_bubble("uw", 20, 20, 80, 340, "text")]
+        called_sizes = []
+        orig_wrap = self.ip.wrap_text
+
+        def spy_wrap(*args, **kwargs):
+            called_sizes.append(args[2].size)
+            return orig_wrap(*args, **kwargs)
+
+        with patch.object(self.ip, "wrap_text", side_effect=spy_wrap):
+            self.ip.render_bubbles(
+                img_fast,
+                tall_narrow,
+                {"uw": "dunia memang penuh tantangan besar"},
+                "id",
+                font_path=self.font_path,
+            )
+
+        self.assertGreater(len(called_sizes), 0)
+        self.assertNotIn(110, called_sizes)
+
+        # 2. wrap_text with max_lines early-exits to None on long breakable words with tight line limit
+        draw = ImageDraw.Draw(img_fast)
+        font_large = self.ip.get_font(self.font_path, 40)
+        early = self.ip.wrap_text(
+            "mengembalikan pertanggungjawaban ketidakberdayaan",
+            draw,
+            font_large,
+            100,
+            "id",
+            max_lines=2,
+        )
+        self.assertIsNone(early)
+
+        # 3. Direct 5-arg calls remain backward compatible and return list[str]
+        wrapped = self.ip.wrap_text("pertanggungjawaban ketidakberdayaan", draw, font_large, 100, "id")
+        self.assertIsInstance(wrapped, list)
+        self.assertGreater(len(wrapped), 2)
+
+        broken = self.ip.break_word("pertanggungjawaban", draw, font_large, 100, "id")
+        self.assertIsInstance(broken, list)
+        self.assertGreater(len(broken), 1)
 
 
 if __name__ == "__main__":

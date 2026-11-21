@@ -262,7 +262,7 @@ def _split_syllables(word, target_lang):
         syllables = list(word)
     return tuple(syllables)
 
-def break_word(word, draw, font, max_width, target_lang):
+def break_word(word, draw, font, max_width, target_lang, remaining_lines=None, fail_on_overflow=False):
     if len(word) <= 5:
         return [word]
 
@@ -278,41 +278,74 @@ def break_word(word, draw, font, max_width, target_lang):
             current_part += syl
         else:
             if not current_part:
+                if fail_on_overflow:
+                    return None
                 lines.append(syl + ("" if is_last_syl else "-"))
                 current_part = ""
             else:
                 lines.append(current_part + "-")
                 current_part = syl
+            if remaining_lines is not None:
+                min_needed = len(lines) + (1 if (current_part or not is_last_syl) else 0)
+                if min_needed > remaining_lines:
+                    return None
     if current_part:
         lines.append(current_part)
+    if remaining_lines is not None and len(lines) > remaining_lines:
+        return None
     return lines
 
-def wrap_text(text, draw, font, max_width, target_lang):
+def wrap_text(text, draw, font, max_width, target_lang, max_lines=None):
     words = text.split()
     lines = []
     current_line = ""
     for word in words:
-        test_line = current_line + " " + word if current_line else word
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        if (bbox[2] - bbox[0]) <= max_width:
-            current_line = test_line
-        else:
-            if current_line:
-                lines.append(current_line)
-                current_line = ""
-            
+        if current_line:
+            test_line = current_line + " " + word
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            if (bbox[2] - bbox[0]) <= max_width:
+                current_line = test_line
+                continue
+            lines.append(current_line)
+            current_line = ""
+            if max_lines is not None and len(lines) >= max_lines:
+                return None
             bbox_word = draw.textbbox((0, 0), word, font=font)
             if (bbox_word[2] - bbox_word[0]) <= max_width:
                 current_line = word
-            else:
-                broken_lines = break_word(word, draw, font, max_width, target_lang)
-                if broken_lines:
-                    lines.extend(broken_lines[:-1])
-                    current_line = broken_lines[-1]
-                else:
-                    current_line = ""
+                continue
+        else:
+            bbox_word = draw.textbbox((0, 0), word, font=font)
+            if (bbox_word[2] - bbox_word[0]) <= max_width:
+                current_line = word
+                continue
+
+        if max_lines is not None and len(word) <= 5:
+            return None
+
+        rem = None if max_lines is None else (max_lines - len(lines))
+        broken_lines = break_word(
+            word,
+            draw,
+            font,
+            max_width,
+            target_lang,
+            remaining_lines=rem,
+            fail_on_overflow=(max_lines is not None),
+        )
+        if broken_lines is None:
+            return None
+        if broken_lines:
+            lines.extend(broken_lines[:-1])
+            current_line = broken_lines[-1]
+        else:
+            current_line = ""
+        if max_lines is not None and len(lines) + (1 if current_line else 0) > max_lines:
+            return None
     if current_line:
         lines.append(current_line)
+    if max_lines is not None and len(lines) > max_lines:
+        return None
     return lines
 
 def extract_bubbles(image_path, ocr, index, translate_code, image_id, timings=None):
@@ -389,6 +422,47 @@ def _measure_lines(translated, draw, font, avail_width, target_lang, line_height
             max_line_width = w
     return lines, line_widths, total_height, max_line_width
 
+def _try_fit_layout(
+    translated,
+    draw,
+    font,
+    avail_width,
+    avail_height,
+    target_lang,
+    line_spacing_factor,
+    unbreakable_words,
+    has_words,
+):
+    """Return layout tuple if text fits inside (avail_width, avail_height), else None."""
+    ascent, descent = font.getmetrics()
+    line_height = int((ascent + descent) * line_spacing_factor)
+    if has_words and line_height > avail_height:
+        return None
+
+    for uw in unbreakable_words:
+        bbox = draw.textbbox((0, 0), uw, font=font)
+        if (bbox[2] - bbox[0]) > avail_width:
+            return None
+
+    max_lines = (avail_height // line_height) if (has_words and line_height > 0) else None
+    lines = wrap_text(translated, draw, font, avail_width, target_lang, max_lines=max_lines)
+    if lines is None:
+        return None
+
+    total_height = line_height * len(lines)
+    if total_height > avail_height:
+        return None
+
+    line_widths = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        if w > avail_width:
+            return None
+        line_widths.append(w)
+
+    return font, lines, line_widths, line_height, total_height
+
 def render_bubbles(img_pil, bubbles, translations, targetLang,
                     font_path="static/fonts/Winky_Rough/WinkyRough-Regular.ttf",
                     draw=None):
@@ -420,22 +494,27 @@ def render_bubbles(img_pil, bubbles, translations, targetLang,
         avail_width = max(10, text_box_width)
         avail_height = max(10, box_height - 4)
 
-        has_words = bool(translated.split())
+        words = translated.split()
+        has_words = bool(words)
+        unbreakable_words = tuple(sorted({w for w in words if len(w) <= 5}, key=len, reverse=True)[:3])
+
         fitted = None
         font_size = 110
         while font_size > 12:
             font = get_font(font_path, font_size)
-            ascent, descent = font.getmetrics()
-            line_height = int((ascent + descent) * line_spacing_factor)
-            if has_words and line_height > avail_height:
-                font_size -= 1
-                continue
-
-            lines, line_widths, total_height, max_line_width = _measure_lines(
-                translated, draw, font, avail_width, targetLang, line_height
+            res = _try_fit_layout(
+                translated,
+                draw,
+                font,
+                avail_width,
+                avail_height,
+                targetLang,
+                line_spacing_factor,
+                unbreakable_words,
+                has_words,
             )
-            if total_height <= avail_height and max_line_width <= avail_width:
-                fitted = (font, lines, line_widths, line_height, total_height)
+            if res is not None:
+                fitted = res
                 break
             font_size -= 1
 
