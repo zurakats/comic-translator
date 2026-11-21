@@ -2,6 +2,10 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from image_processor import (
     extract_bubbles,
+    detect_bubbles,
+    batch_manga_ocr,
+    clean_ocr_text,
+    MANGA_OCR_BATCH_SIZE,
     render_bubbles,
     batch_gemini_translate,
     batch_google_translate,
@@ -64,6 +68,7 @@ def process_image_endpoint():
         t_read = 0.0
         t_yolo = 0.0
         t_ocr_infer = 0.0
+        all_pending_crops = []
         for img_idx, file in enumerate(files):
             raw_filename = secure_filename(file.filename)
             name, ext = os.path.splitext(raw_filename)
@@ -72,21 +77,45 @@ def process_image_endpoint():
             file.save(filepath)
 
             img_timings = {}
-            img_pil, bubbles = extract_bubbles(
-                filepath, ocr, index, translate_code, image_id=img_idx, timings=img_timings
-            )
+            if index == 0:
+                img_pil, bubbles, pending_crops = detect_bubbles(
+                    filepath, image_id=img_idx, timings=img_timings
+                )
+                all_pending_crops.extend(pending_crops)
+                print(
+                    f"[Timing] img {img_idx+1}/{len(files)} ({filename}): "
+                    f"yolo={img_timings.get('yolo', 0.0):.2f}s ({len(bubbles)} bubbles)"
+                )
+            else:
+                img_pil, bubbles = extract_bubbles(
+                    filepath, ocr, index, translate_code, image_id=img_idx, timings=img_timings
+                )
+                t_ocr_infer += img_timings.get("ocr", 0.0)
+                print(
+                    f"[Timing] img {img_idx+1}/{len(files)} ({filename}): "
+                    f"yolo={img_timings.get('yolo', 0.0):.2f}s "
+                    f"ocr={img_timings.get('ocr', 0.0):.2f}s ({len(bubbles)} bubbles)"
+                )
+
             t_read += img_timings.get("read", 0.0)
             t_yolo += img_timings.get("yolo", 0.0)
-            t_ocr_infer += img_timings.get("ocr", 0.0)
-            print(
-                f"[Timing] img {img_idx+1}/{len(files)} ({filename}): "
-                f"yolo={img_timings.get('yolo', 0.0):.2f}s "
-                f"ocr={img_timings.get('ocr', 0.0):.2f}s ({len(bubbles)} bubbles)"
-            )
             image_contexts.append({
                 'img_pil': img_pil, 'bubbles': bubbles, 'filename': filename
             })
             all_bubbles.extend(bubbles)
+
+        if index == 0 and all_pending_crops:
+            t0 = time.perf_counter()
+            texts = batch_manga_ocr(ocr, [crop for _, crop in all_pending_crops])
+            for (bubble, _), text in zip(all_pending_crops, texts):
+                bubble["ocr_text"] = text
+                bubble["cleaned_text"] = clean_ocr_text(text) or ""
+            t_ocr_infer = time.perf_counter() - t0
+            all_pending_crops.clear()
+            print(
+                f"[Timing] manga_ocr_batch: {t_ocr_infer:.2f}s "
+                f"({len(texts)} bubbles, batch_size={MANGA_OCR_BATCH_SIZE})"
+            )
 
         # Fase 2: SATU (atau sedikit, kalau > batch_size) request Gemini untuk semua bubble
         translations = {}

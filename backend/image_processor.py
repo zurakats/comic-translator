@@ -8,6 +8,7 @@ import torch
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from manga_ocr import MangaOcr
+from manga_ocr.ocr import post_process as manga_ocr_post_process
 import easyocr
 from googletrans import Translator
 import pathlib
@@ -348,8 +349,38 @@ def wrap_text(text, draw, font, max_width, target_lang, max_lines=None):
         return None
     return lines
 
-def extract_bubbles(image_path, ocr, index, translate_code, image_id, timings=None):
-    # YOLO + OCR
+MANGA_OCR_BATCH_SIZE = 16
+
+
+def batch_manga_ocr(ocr, crops, batch_size=MANGA_OCR_BATCH_SIZE):
+    """Run MangaOcr on a list of PIL crops in area-sorted batches, preserving original order."""
+    if not crops:
+        return []
+
+    if not isinstance(ocr, MangaOcr):
+        return [ocr(c) or "" for c in crops]
+
+    order = sorted(range(len(crops)), key=lambda idx: crops[idx].size[0] * crops[idx].size[1])
+    results = [""] * len(crops)
+    device = getattr(ocr.model, "device", None)
+
+    with torch.inference_mode():
+        for start in range(0, len(order), batch_size):
+            batch_indices = order[start : start + batch_size]
+            chunk_imgs = [crops[idx].convert("L").convert("RGB") for idx in batch_indices]
+            pixel_values = ocr.processor(chunk_imgs, return_tensors="pt").pixel_values
+            if device is not None:
+                pixel_values = pixel_values.to(device)
+            generated_ids = ocr.model.generate(pixel_values, max_length=300)
+            decoded = ocr.tokenizer.batch_decode(generated_ids.cpu(), skip_special_tokens=True)
+            for idx, raw_text in zip(batch_indices, decoded):
+                results[idx] = manga_ocr_post_process(raw_text) or ""
+
+    return results
+
+
+def detect_bubbles(image_path, image_id, timings=None):
+    """Run YOLOv5 detection on one image and return (img_pil, bubbles, pending_crops)."""
     t_read0 = time.perf_counter()
     img_cv = cv2.imread(image_path)
     if img_cv is None:
@@ -364,7 +395,66 @@ def extract_bubbles(image_path, ocr, index, translate_code, image_id, timings=No
     detections = results.xyxy[0][:, :4].tolist()
     t_yolo = time.perf_counter() - t_yolo0
 
-    img_pil = Image.fromarray(img_rgb) if index == 0 else None
+    img_pil = Image.fromarray(img_rgb)
+    bubbles = []
+    pending_crops = []
+    for bubble_idx, box in enumerate(detections):
+        x1, y1, x2, y2 = (int(round(v)) for v in box)
+        x1 = max(0, min(width, x1))
+        y1 = max(0, min(height, y1))
+        x2 = max(0, min(width, x2))
+        y2 = max(0, min(height, y2))
+        orig_box_width = x2 - x1
+        orig_box_height = y2 - y1
+
+        bubble = {
+            "id": f"{image_id}_{bubble_idx}",
+            "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+            "orig_box_width": orig_box_width,
+            "orig_box_height": orig_box_height,
+            "ocr_text": "",
+            "cleaned_text": "",
+        }
+        bubbles.append(bubble)
+        if orig_box_width > 0 and orig_box_height > 0:
+            pending_crops.append((bubble, img_pil.crop((x1, y1, x2, y2))))
+
+    if timings is not None:
+        timings["read"] = timings.get("read", 0.0) + t_read
+        timings["yolo"] = timings.get("yolo", 0.0) + t_yolo
+
+    return img_pil, bubbles, pending_crops
+
+
+def extract_bubbles(image_path, ocr, index, translate_code, image_id, timings=None):
+    # YOLO + OCR
+    if index == 0:
+        img_pil, bubbles, pending_crops = detect_bubbles(image_path, image_id, timings=timings)
+        t_ocr0 = time.perf_counter()
+        if pending_crops:
+            texts = batch_manga_ocr(ocr, [crop for _, crop in pending_crops])
+            for (bubble, _), text in zip(pending_crops, texts):
+                bubble["ocr_text"] = text
+                bubble["cleaned_text"] = clean_ocr_text(text) or ""
+        t_ocr = time.perf_counter() - t_ocr0
+        if timings is not None:
+            timings["ocr"] = timings.get("ocr", 0.0) + t_ocr
+        return img_pil, bubbles
+
+    t_read0 = time.perf_counter()
+    img_cv = cv2.imread(image_path)
+    if img_cv is None:
+        raise ValueError(f"Failed to read image: {image_path}")
+    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB, dst=img_cv)
+    height, width = img_rgb.shape[:2]
+    t_read = time.perf_counter() - t_read0
+
+    t_yolo0 = time.perf_counter()
+    with torch.inference_mode():
+        results = get_yolo_model()(img_rgb)
+    detections = results.xyxy[0][:, :4].tolist()
+    t_yolo = time.perf_counter() - t_yolo0
+
     bubbles = []
     t_ocr0 = time.perf_counter()
     for bubble_idx, box in enumerate(detections):
@@ -378,9 +468,6 @@ def extract_bubbles(image_path, ocr, index, translate_code, image_id, timings=No
 
         if orig_box_width <= 0 or orig_box_height <= 0:
             text = ""
-        elif index == 0:
-            cropped = img_pil.crop((x1, y1, x2, y2))
-            text = ocr(cropped) or ""
         else:
             cropped_np = img_rgb[y1:y2, x1:x2]
             result = ocr.readtext(cropped_np, detail=0)
@@ -398,8 +485,7 @@ def extract_bubbles(image_path, ocr, index, translate_code, image_id, timings=No
         })
     t_ocr = time.perf_counter() - t_ocr0
 
-    if img_pil is None:
-        img_pil = Image.fromarray(img_rgb)
+    img_pil = Image.fromarray(img_rgb)
 
     if timings is not None:
         timings["read"] = timings.get("read", 0.0) + t_read
