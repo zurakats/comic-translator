@@ -1,24 +1,76 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Save, Settings2, AlertTriangle, ChevronDown } from 'lucide-react';
 import Footer from '../components/Footer';
+import { fetchSettings, saveSettings } from '../utils/api';
 
 const Settings = () => {
   const [engine, setEngine] = useState('googletrans');
   const [apiKey, setApiKey] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+  const savedTimeoutRef = useRef(null);
 
   useEffect(() => {
-    const savedEngine = localStorage.getItem('translationEngine');
-    const savedKey = localStorage.getItem('geminiApiKey');
-    if (savedEngine) setEngine(savedEngine);
-    if (savedKey) setApiKey(savedKey);
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const data = await fetchSettings();
+        if (cancelled) return;
+        setEngine(data.engine || 'googletrans');
+        setApiKey(data.apiKey || '');
+        setError('');
+      } catch (err) {
+        if (cancelled) return;
+        console.error('Failed to load settings:', err);
+        setError('Failed to load settings from server. Please make sure the backend is running.');
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+      if (savedTimeoutRef.current) {
+        clearTimeout(savedTimeoutRef.current);
+      }
+    };
   }, []);
 
-  const handleSave = () => {
-    localStorage.setItem('translationEngine', engine);
-    localStorage.setItem('geminiApiKey', apiKey.trim());
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+  const handleSave = async () => {
+    if (savedTimeoutRef.current) {
+      clearTimeout(savedTimeoutRef.current);
+      savedTimeoutRef.current = null;
+    }
+
+    setIsSaving(true);
+    setSaved(false);
+    setError('');
+
+    try {
+      const res = await saveSettings({
+        engine,
+        apiKey: apiKey.trim(),
+      });
+      setEngine(res.engine || engine);
+      setApiKey(typeof res.apiKey === 'string' ? res.apiKey : apiKey.trim());
+      setSaved(true);
+      savedTimeoutRef.current = setTimeout(() => {
+        setSaved(false);
+        savedTimeoutRef.current = null;
+      }, 3000);
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+      setError(err.message || 'Failed to save settings to server.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -64,7 +116,8 @@ const Settings = () => {
               id="translation-engine"
               value={engine}
               onChange={(e) => setEngine(e.target.value)}
-              className="w-full p-4 pr-12 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-all cursor-pointer shadow-inner appearance-none"
+              disabled={isLoading || isSaving}
+              className="w-full p-4 pr-12 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-all cursor-pointer shadow-inner appearance-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <option value="googletrans">
                 Google Translate (Free &amp; Default)
@@ -93,8 +146,9 @@ const Settings = () => {
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
+              disabled={isLoading || isSaving}
               placeholder="Enter your API key here..."
-              className="p-4 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-all placeholder:text-white/30"
+              className="p-4 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-all placeholder:text-white/30 disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <p className="text-sm text-white/50 mt-1 leading-relaxed">
               Get a free API key at{' '}
@@ -125,11 +179,18 @@ const Settings = () => {
         <button
           type="button"
           onClick={handleSave}
-          className="mt-2 flex items-center justify-center gap-3 w-full py-4 bg-brand-blue text-white text-base sm:text-lg font-bold tracking-widest rounded-xl hover:bg-brand-blue-hover transition-all duration-300 shadow-[0_4px_14px_rgba(38,123,250,0.3)] hover:shadow-[0_6px_20px_rgba(38,123,250,0.4)] cursor-pointer"
+          disabled={isLoading || isSaving}
+          className="mt-2 flex items-center justify-center gap-3 w-full py-4 bg-brand-blue text-white text-base sm:text-lg font-bold tracking-widest rounded-xl hover:bg-brand-blue-hover transition-all duration-300 shadow-[0_4px_14px_rgba(38,123,250,0.3)] hover:shadow-[0_6px_20px_rgba(38,123,250,0.4)] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Save size={22} />
-          SAVE SETTINGS
+          {isLoading ? 'LOADING...' : isSaving ? 'SAVING...' : 'SAVE SETTINGS'}
         </button>
+
+        {error && (
+          <p className="text-red-400 text-center font-semibold text-sm tracking-wide">
+            {error}
+          </p>
+        )}
 
         {saved && (
           <p className="text-green-400 text-center font-bold text-sm tracking-widest animate-pulse">

@@ -1,6 +1,6 @@
 # Comic & Manga Translator v2
 
-A local web application for translating text inside comic and manga image pages. You upload one or more pages through the browser, select the source and target languages, and the local Python backend detects speech bubbles with YOLOv5, extracts text using cross-page batched Manga-OCR or zero-copy EasyOCR, translates the dialogue using Google Translate or the Google Gemini API, and renders the translated text back onto the images with automatic font fitting and syllable hyphenation. Results can be viewed side by side in the browser, reviewed later from the history page, or exported as a single PDF file.
+A local client-server web application for translating text inside comic and manga image pages over localhost or a local Wi-Fi network. Run the Python backend and Vite server on your desktop PC, then open the web UI from the desktop or from any smartphone/tablet on the same Wi-Fi network. You upload one or more pages through the browser, select the source and target languages, and the desktop backend detects speech bubbles with YOLOv5, extracts text using cross-page batched Manga-OCR or zero-copy EasyOCR, translates the dialogue using Google Translate or the Google Gemini API, and renders the translated text back onto the images with automatic font fitting and syllable hyphenation. Results, shared history (with batch renaming and deletion), and server-wide translation settings are stored centrally on the desktop and can be accessed from any connected device, or exported as a single PDF file.
 
 ---
 
@@ -34,7 +34,7 @@ The application consists of two processes that run locally: a **Python Flask bac
    ```bash
    cd backend
    ```
-   > **Note**: Keep `backend/` as your working directory when running the server, as `app.py` and `render_bubbles()` resolve `static/uploads`, `static/history.json`, and default font paths relative to this folder.
+   > **Note**: Keep `backend/` as your working directory when running the server, as `app.py` and `render_bubbles()` resolve `static/uploads`, `static/history.json`, `static/settings.json`, and default font paths relative to this folder.
 
 2. Create and activate a Python virtual environment:
    - **Windows (PowerShell)**:
@@ -82,38 +82,41 @@ The application consists of two processes that run locally: a **Python Flask bac
    ```bash
    npm run dev
    ```
+   Vite is configured with `host: true` on port `5173` and proxies `/api/*` and `/static/*` requests to the local Flask backend (`http://127.0.0.1:5000`, configurable via `VITE_BACKEND_URL`).
 
-4. Open the local URL shown in the terminal (by default `http://localhost:5173`) in your web browser.
+4. Open the application:
+   - **On the desktop**: open `http://localhost:5173` in your web browser.
+   - **From a smartphone or tablet on the same Wi-Fi network**: copy the `Network: http://<DESKTOP_LAN_IP>:5173` URL printed in the Vite terminal and open it in your mobile browser. All devices share the same settings, uploaded pages, and translation history stored on the desktop server.
 
 ---
 
 ## How to Use
 
-> **Note**: Navigation links are labeled in English (`Home`, `History`, `Settings`), while buttons and form labels inside the pages are displayed in Indonesian.
+> **Note**: Navigation links are labeled in English (`Home`, `History`, `Settings`), while interface controls are displayed in English.
 
 1. **Choose a translation engine (optional)**:
-   - Open **Settings** from the top navigation bar.
-   - Select either **Google Translate (Gratis & Default)** or **Google Gemini AI (Lebih Natural & Pintar)**.
-   - If you select Google Gemini AI, paste your API key from [Google AI Studio](https://aistudio.google.com/) and click **SIMPAN PENGATURAN**. Your selection and key are stored in your browser's `localStorage`.
+   - Open **Settings** from the top navigation bar (on the desktop or any connected device).
+   - Select either **Google Translate (Free & Default)** or **Google Gemini AI (More Natural & Context-Aware)**.
+   - If you select Google Gemini AI, paste your API key from [Google AI Studio](https://aistudio.google.com/) and click **SAVE SETTINGS**. Your selection and API key are saved centrally on the desktop server (`backend/static/settings.json`), so other devices on the same Wi-Fi can immediately translate with Gemini without re-entering the key.
 2. **Upload comic pages**:
-   - On the **Home** page, click **UPLOAD GAMBAR** and select one or more image files.
+   - On the **Home** page, click **UPLOAD IMAGES** and select one or more image files from your desktop or mobile gallery.
 3. **Select languages**:
-   - Choose the source language from the left dropdown (`Bahasa Jepang`, `Bahasa Korea`, `Bahasa Mandarin`, or `Bahasa Inggris`).
-   - Choose the target language from the right dropdown (`Bahasa Indonesia` or `Bahasa Inggris`).
+   - Choose the source language from the left dropdown (`Japanese`, `Korean`, `Chinese (Simplified)`, or `English`).
+   - Choose the target language from the right dropdown (`Indonesian` or `English`).
 4. **Run translation**:
-   - Click **Terjemahkan**. The status box displays elapsed processing time until the backend responds, while the backend terminal logs per-image and per-phase timing breakdowns (`[Timing] ...`).
-   - Once complete, each page is shown side by side under **Asli** (original) and **Terjemahan** (translated).
+   - Click **Translate**. The status box displays elapsed processing time until the backend responds, while the backend terminal logs per-image and per-phase timing breakdowns (`[Timing] ...`).
+   - Once complete, each page is shown side by side on desktop (or switchable **Original** / **Translated** reader tabs on mobile/tablet).
 5. **Export to PDF**:
-   - After results appear, click **DOWNLOAD PDF** to combine the translated images into a single `hasil_gambar.pdf` file.
-6. **View or clear history**:
-   - Open **History** to browse past translation sessions saved on the backend.
-   - Toggle between grid and list layouts, click any entry to open a side-by-side modal view, or click **Hapus Semua** to clear the saved history and delete uploaded/output image files from `backend/static/uploads/`.
+   - After results appear, click **Download PDF** to combine the translated images into a single `translated_comic.pdf` file.
+6. **View, rename, or delete history**:
+   - Open **History** from any connected device to browse past translation sessions saved on the desktop backend (`backend/static/history.json`).
+   - Toggle between grid and list layouts, rename batches (persisted on the server and synced across devices), click any entry to open the reader modal, delete individual batches, or click **Clear All** to clear all saved history and delete files from `backend/static/uploads/`.
 
 ---
 
 ## Running Backend Tests
 
-The `backend/tests/` directory contains 36 unit and integration tests covering OCR LRU caching, offline-first YOLOv5 loading, bubble extraction, cross-page batched Manga-OCR, binary-search text rendering with pixel-equivalence checks, and OCR text cleaning / hyphenation rules:
+The `backend/tests/` directory contains 46 unit and integration tests across 8 modules covering OCR LRU caching, offline-first YOLOv5 loading, bubble extraction, cross-page batched Manga-OCR, binary-search text rendering with pixel-equivalence checks, OCR text cleaning / hyphenation rules, single-batch history deletion, and Wi-Fi client-server settings/history/proxy contracts:
 
 ```powershell
 backend\.venv\Scripts\python.exe -m unittest discover -s backend/tests -v
@@ -126,7 +129,9 @@ backend\.venv\Scripts\python.exe -m unittest discover -s backend/tests -v
 - **`NotImplementedError: cannot instantiate 'WindowsPath' on your system` (Linux / macOS)**:
   Line 24 of `backend/image_processor.py` sets `pathlib.PosixPath = pathlib.WindowsPath` so YOLOv5 weights trained on Linux can load on Windows. On Linux or macOS, remove or comment out that line (or guard it with `if os.name == 'nt':`).
 - **Frontend cannot reach the backend**:
-  The frontend sends requests directly to `http://127.0.0.1:5000`. Make sure `python app.py` is running from the `backend/` directory before starting a translation.
+  Vite proxies `/api/*` and `/static/*` requests directly to `http://127.0.0.1:5000` (or `VITE_BACKEND_URL`). Make sure `python app.py` is running from the `backend/` directory before using the web app.
+- **Smartphone/tablet on the same Wi-Fi cannot open `http://<DESKTOP_LAN_IP>:5173`**:
+  On Windows, verify that your Wi-Fi network profile is set to **Private** (not Public) and allow Node.js (`5173`) through **Windows Defender Firewall** when prompted. Make sure both the desktop and mobile device are on the same Wi-Fi subnet without AP/client isolation enabled on the router.
 - **Google Gemini rate limits (`HTTP 429`)**:
   Free-tier Gemini API keys have per-minute and per-day request limits. The backend waits and retries once on temporary `429`/`503` responses, and falls back to Google Translate for bubbles that were not returned by Gemini (including when the daily quota is exceeded).
 

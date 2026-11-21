@@ -3,6 +3,7 @@ import { jsPDF } from 'jspdf';
 import { Download, Upload, RefreshCw } from 'lucide-react';
 import ComicBatchViewer from '../components/ComicBatchViewer';
 import Footer from '../components/Footer';
+import { fetchSettings, processImages } from '../utils/api';
 
 const Home = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -62,39 +63,36 @@ const Home = () => {
       return;
     }
 
-    const engine = localStorage.getItem('translationEngine') || 'googletrans';
-    const apiKey = localStorage.getItem('geminiApiKey') || '';
-
-    if (engine === 'gemini' && !apiKey) {
-      alert('Gemini API key is not set. Please configure it in Settings.');
-      return;
-    }
-
     setIsProcessing(true);
-    startTimer();
     setStatusColor('rgba(0, 0, 0, 0.6)');
-    setStatusText('Processing...');
-
-    const formData = new FormData();
-    selectedFiles.forEach((file) => {
-      formData.append('image[]', file);
-    });
-    formData.append('source', sourceLang);
-    formData.append('target', targetLang);
-    formData.append('engine', engine);
-    formData.append('apiKey', apiKey);
+    setStatusText('Loading settings...');
 
     try {
-      const response = await fetch('http://127.0.0.1:5000/process-image', {
-        method: 'POST',
-        body: formData,
-      });
+      const currentSettings = await fetchSettings();
+      const engine = currentSettings?.engine || 'googletrans';
+      const apiKey = (currentSettings?.apiKey || '').trim();
 
-      if (!response.ok) {
-        throw new Error(await response.text());
+      if (engine === 'gemini' && !apiKey) {
+        setStatusText(
+          `${selectedFiles.length} ${selectedFiles.length === 1 ? 'image' : 'images'} selected`
+        );
+        alert('Gemini API key is not set. Please configure it in Settings.');
+        return;
       }
 
-      const data = await response.json();
+      startTimer();
+      setStatusText('Processing...');
+
+      const formData = new FormData();
+      selectedFiles.forEach((file) => {
+        formData.append('image[]', file);
+      });
+      formData.append('source', sourceLang);
+      formData.append('target', targetLang);
+      formData.append('engine', engine);
+      formData.append('apiKey', apiKey);
+
+      const data = await processImages(formData);
 
       if (!data.results || data.results.length === 0) {
         throw new Error('Translation returned no results.');

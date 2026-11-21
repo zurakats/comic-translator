@@ -2,8 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Trash2, LayoutGrid, List, X, Pencil, Check } from 'lucide-react';
 import ComicBatchViewer from '../components/ComicBatchViewer';
 import Footer from '../components/Footer';
-
-const BATCH_NAMES_STORAGE_KEY = 'historyBatchNames';
+import {
+  fetchHistory,
+  renameHistoryBatch,
+  deleteHistoryBatch,
+  clearAllHistory,
+} from '../utils/api';
 
 const LANG_CODE_MAP = {
   jp: 'JP',
@@ -17,41 +21,39 @@ const LANG_CODE_MAP = {
 const formatLangCode = (code) =>
   LANG_CODE_MAP[code] || (code || '').toUpperCase();
 
-const loadBatchNames = () => {
-  try {
-    const raw = localStorage.getItem(BATCH_NAMES_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed;
-  } catch {
-    return {};
-  }
-};
-
-const saveBatchNamesToStorage = (map) => {
-  try {
-    localStorage.setItem(BATCH_NAMES_STORAGE_KEY, JSON.stringify(map));
-  } catch (err) {
-    console.error('Failed to save batch names:', err);
-  }
-};
-
 const History = () => {
   const [history, setHistory] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
   const [selectedItem, setSelectedItem] = useState(null);
-  const [batchNames, setBatchNames] = useState(() => loadBatchNames());
   const [editingTarget, setEditingTarget] = useState(null); // { id: string, scope: 'card' | 'modal' }
   const [draftName, setDraftName] = useState('');
 
   useEffect(() => {
-    fetch('http://127.0.0.1:5000/history')
-      .then((res) => res.json())
-      .then((data) => setHistory(data))
-      .catch((err) => console.error('Failed to fetch history:', err));
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const data = await fetchHistory();
+        if (cancelled) return;
+        setHistory(data);
+        setError('');
+      } catch (err) {
+        if (cancelled) return;
+        console.error('Failed to fetch history:', err);
+        setError('Failed to load translation history from server.');
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -79,13 +81,12 @@ const History = () => {
     };
   }, [selectedItem, editingTarget]);
 
-  const getBatchName = (id) => batchNames[String(id)] || '';
+  const getBatchName = (item) => item?.name || '';
 
-  const startEditing = (id, scope, e) => {
+  const startEditing = (item, scope, e) => {
     e?.stopPropagation();
-    const idKey = String(id);
-    setEditingTarget({ id: idKey, scope });
-    setDraftName(batchNames[idKey] || '');
+    setEditingTarget({ id: String(item.id), scope });
+    setDraftName(item.name || '');
   };
 
   const cancelEditing = (e) => {
@@ -94,79 +95,62 @@ const History = () => {
     setDraftName('');
   };
 
-  const commitBatchName = (id, e) => {
+  const commitBatchName = async (id, e) => {
     e?.preventDefault();
     e?.stopPropagation();
 
-    const idKey = String(id);
-    const trimmed = draftName.trim();
-    const next = { ...batchNames };
+    const trimmed = draftName.trim().slice(0, 80);
 
-    if (trimmed) {
-      next[idKey] = trimmed;
-    } else {
-      delete next[idKey];
+    try {
+      const res = await renameHistoryBatch(id, trimmed);
+      const savedName = typeof res?.name === 'string' ? res.name : trimmed;
+
+      setHistory((prev) =>
+        prev.map((entry) =>
+          entry.id === id ? { ...entry, name: savedName } : entry
+        )
+      );
+      setSelectedItem((prev) =>
+        prev && prev.id === id ? { ...prev, name: savedName } : prev
+      );
+      setEditingTarget(null);
+      setDraftName('');
+    } catch (err) {
+      console.error('Failed to rename batch:', err);
+      alert('Failed to rename batch. Please make sure the backend server is running.');
     }
-
-    setBatchNames(next);
-    saveBatchNamesToStorage(next);
-    setEditingTarget(null);
-    setDraftName('');
   };
 
   const clearHistory = async () => {
     if (window.confirm('Are you sure you want to delete all translation history?')) {
       try {
-        const res = await fetch('http://127.0.0.1:5000/clear-history', {
-          method: 'POST',
-        });
-        if (res.ok) {
-          setHistory([]);
-          setBatchNames({});
-          try {
-            localStorage.removeItem(BATCH_NAMES_STORAGE_KEY);
-          } catch {
-            // Ignore storage errors on clear
-          }
-          setSelectedItem(null);
-          setEditingTarget(null);
-          setDraftName('');
-        }
+        await clearAllHistory();
+        setHistory([]);
+        setSelectedItem(null);
+        setEditingTarget(null);
+        setDraftName('');
       } catch (err) {
         console.error('Failed to clear history:', err);
+        alert('Failed to clear history. Please make sure the backend server is running.');
       }
     }
   };
 
   const deleteBatch = async (item, e) => {
     e?.stopPropagation();
-    const label = getBatchName(item.id) || 'Untitled Batch';
+    const label = getBatchName(item) || 'Untitled Batch';
     if (!window.confirm(`Are you sure you want to delete "${label}"?`)) {
       return;
     }
 
     try {
-      const res = await fetch(`http://127.0.0.1:5000/history/${item.id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
+      await deleteHistoryBatch(item.id);
       setHistory((prev) => prev.filter((entry) => entry.id !== item.id));
-
-      const idKey = String(item.id);
-      if (Object.prototype.hasOwnProperty.call(batchNames, idKey)) {
-        const nextNames = { ...batchNames };
-        delete nextNames[idKey];
-        setBatchNames(nextNames);
-        saveBatchNamesToStorage(nextNames);
-      }
 
       if (selectedItem?.id === item.id) {
         setSelectedItem(null);
       }
-      if (editingTarget?.id === idKey) {
+      if (editingTarget?.id === String(item.id)) {
         setEditingTarget(null);
         setDraftName('');
       }
@@ -284,7 +268,19 @@ const History = () => {
       </div>
 
       {/* History Content */}
-      {history.length === 0 ? (
+      {isLoading ? (
+        <div className="flex-1 flex items-center justify-center z-10 px-4">
+          <p className="text-xl text-white/60 tracking-wider text-center">
+            Loading translation history...
+          </p>
+        </div>
+      ) : error ? (
+        <div className="flex-1 flex items-center justify-center z-10 px-4">
+          <p className="text-xl text-red-400 tracking-wider text-center">
+            {error}
+          </p>
+        </div>
+      ) : history.length === 0 ? (
         <div className="flex-1 flex items-center justify-center z-10 px-4">
           <p className="text-xl text-white/40 tracking-wider text-center">
             No translation history yet.
@@ -299,7 +295,7 @@ const History = () => {
           }`}
         >
           {history.map((item) => {
-            const customName = getBatchName(item.id);
+            const customName = getBatchName(item);
             const isEditingCard =
               editingTarget?.scope === 'card' &&
               editingTarget.id === String(item.id);
@@ -350,7 +346,7 @@ const History = () => {
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
-                            onClick={(e) => startEditing(item.id, 'card', e)}
+                            onClick={(e) => startEditing(item, 'card', e)}
                             aria-label="Rename batch"
                             title="Rename batch"
                             className="p-1.5 rounded-lg bg-white/5 text-white/70 hover:text-white hover:bg-brand-blue/80 transition-colors cursor-pointer"
@@ -412,16 +408,16 @@ const History = () => {
                 <div className="flex items-center gap-2 min-w-0">
                   <h2
                     className={`text-lg sm:text-2xl font-bold truncate ${
-                      getBatchName(selectedItem.id)
+                      getBatchName(selectedItem)
                         ? 'text-white'
                         : 'text-white/60 italic'
                     }`}
                   >
-                    {getBatchName(selectedItem.id) || 'Untitled Batch'}
+                    {getBatchName(selectedItem) || 'Untitled Batch'}
                   </h2>
                   <button
                     type="button"
-                    onClick={(e) => startEditing(selectedItem.id, 'modal', e)}
+                    onClick={(e) => startEditing(selectedItem, 'modal', e)}
                     aria-label="Rename batch"
                     title="Rename batch"
                     className="p-1.5 rounded-lg bg-white/10 text-white/75 hover:text-white hover:bg-brand-blue transition-colors shrink-0 cursor-pointer"

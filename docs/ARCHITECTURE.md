@@ -24,24 +24,28 @@ This document describes the architecture, 3-phase processing pipeline, backend a
 
 ## 1. System Architecture & Directory Layout
 
-The application uses a local two-tier client-server layout without an external database or task queue:
+The application uses a local two-tier client-server layout designed to run either on a single desktop or across devices (smartphones/tablets) on the same Wi-Fi network via a single Vite proxy entrypoint, without an external database, authentication, or task queue:
 
-- **Frontend (`frontend/`)**: A React 19 Single-Page Application (Vite 8, React Router DOM 7, Tailwind CSS 4). It handles file selection, stores translation preferences in browser `localStorage`, sends requests to the Flask server, renders side-by-side image previews, and generates PDF downloads client-side via `jsPDF`.
-- **Backend (`backend/`)**: A Flask server running synchronous 3-phase image processing pipelines using PyTorch (YOLOv5), OpenCV, Manga-OCR (cross-page batched inference), EasyOCR (zero-copy NumPy views), `urllib.request` (Gemini REST API), `googletrans==4.0.2` (async batch fallback), `pyphen`, and Pillow. Uploaded images, rendered outputs, and history metadata are persisted directly on the local filesystem.
+- **Frontend (`frontend/`)**: A React 19 Single-Page Application (Vite 8, React Router DOM 7, Tailwind CSS 4). Vite binds to LAN interfaces (`host: true`, port `5173`) and proxies `/api/*` (rewritten to Flask root routes) and `/static/*` requests to the desktop Flask server (`http://127.0.0.1:5000`, `600s` proxy timeout). The UI delegates all settings, translation requests, and history state to the backend via `src/utils/api.js`, renders responsive views (`ComicBatchViewer`), and generates PDF downloads client-side via `jsPDF`.
+- **Backend (`backend/`)**: A Flask server running synchronous 3-phase image processing pipelines using PyTorch (YOLOv5), OpenCV, Manga-OCR (cross-page batched inference), EasyOCR (zero-copy NumPy views), `urllib.request` (Gemini REST API), `googletrans==4.0.2` (async batch fallback), `pyphen`, and Pillow. Uploaded images, rendered outputs, shared history metadata (`static/history.json`), and shared server settings (`static/settings.json`) are persisted directly on the desktop filesystem using thread-safe atomic writes.
 
 ```mermaid
 flowchart LR
-    subgraph Frontend["Frontend (React 19 + Vite 8)"]
+    subgraph Client["Browser (Desktop / Smartphone / Tablet via Wi-Fi)"]
         Home["Home.jsx\n(Upload, Translate, PDF)"]
-        History["History.jsx\n(Grid/List & Reader Modal)"]
+        History["History.jsx\n(Grid/List, Rename, Delete, Modal)"]
         Settings["Settings.jsx\n(Engine & API Key)"]
-        LS[("Browser localStorage\n(translationEngine, geminiApiKey)")]
+        ApiUtil["utils/api.js\n(/api/* & resolveImageUrl)"]
     end
 
-    subgraph Backend["Backend (Flask)"]
-        App["app.py\n(REST Routes, Timing & 3-Phase Orchestrator)"]
+    subgraph Vite["Vite Dev/Preview Server (0.0.0.0:5173)"]
+        Proxy["Proxy Middleware\n(/api/* -> /*, /static/* -> /static/*)"]
+    end
+
+    subgraph Backend["Backend (Flask :5000)"]
+        App["app.py\n(REST Routes, Locks, Atomic JSON, 3-Phase Orchestrator)"]
         IP["image_processor.py\n(Lazy YOLO, Cached OCR, Translation, Binary-Search Render)"]
-        FS[("static/uploads/\n& static/history.json")]
+        FS[("static/uploads/\nstatic/history.json\nstatic/settings.json")]
     end
 
     subgraph LocalModels["Local Models & Caches"]
@@ -57,10 +61,11 @@ flowchart LR
         GTrans["Google Translate Async\n(googletrans==4.0.2)"]
     end
 
-    Settings <--> LS
-    Home <-- "Read settings" --> LS
-    Home -- "POST /process-image" --> App
-    History -- "GET /history\nPOST /clear-history" --> App
+    Settings --> ApiUtil
+    Home --> ApiUtil
+    History --> ApiUtil
+    ApiUtil -- "/api/* & /static/*" --> Proxy
+    Proxy -- "http://127.0.0.1:5000" --> App
     App <--> FS
     App <--> IP
     IP --> YOLO
@@ -79,36 +84,44 @@ scan-translator-v2/
 ├── docs/
 │   └── ARCHITECTURE.md          # Technical & codebase reference
 ├── backend/
-│   ├── app.py                   # Flask app, routes, 3-phase orchestration, timing logs, history I/O (203 LOC)
+│   ├── app.py                   # Flask app, routes, locks, atomic JSON, 3-phase orchestration (430 LOC)
 │   ├── image_processor.py       # YOLOv5 loader, OCR cache, batched Manga-OCR, translation, rendering (669 LOC)
 │   ├── requirements.txt         # Python dependency list (12 packages)
-│   ├── tests/                   # Unit & integration test suite (6 modules, 36 tests)
+│   ├── tests/                   # Unit & integration test suite (8 modules, 46 tests)
 │   │   ├── test_bubble_extraction.py
+│   │   ├── test_history_delete.py
 │   │   ├── test_manga_ocr_batch.py
 │   │   ├── test_ocr_cache.py
 │   │   ├── test_render_bubbles.py
 │   │   ├── test_text_cleaning_and_hyphenation.py
+│   │   ├── test_wifi_client_server.py
 │   │   └── test_yolo_loader.py
 │   ├── yolo-model/
 │   │   └── bubble-detector-new/
 │   │       └── weights/best.pt  # Custom YOLOv5 weights
 │   └── static/
-│       ├── history.json         # Persisted translation session list
+│       ├── history.json         # Persisted translation session list (gitignored)
+│       ├── settings.json        # Shared server translation engine & Gemini API key (gitignored)
 │       ├── fonts/               # TrueType fonts (WinkyRough, TradeWinds)
-│       └── uploads/             # Uploaded source images and output_* rendered images
+│       └── uploads/             # Uploaded source images and output_* rendered images (gitignored)
 ├── frontend/
 │   ├── package.json             # Dependencies and Vite/oxlint scripts
+│   ├── vite.config.js           # LAN host binding (host: true) and /api + /static proxy config
 │   ├── public/                  # Static assets (hero banners, web fonts, SVG icons)
 │   └── src/
 │       ├── main.jsx             # React root entry point
 │       ├── App.jsx              # React Router setup and layout wrapper
 │       ├── index.css            # Tailwind v4 @theme tokens, @font-face declarations, custom CSS
+│       ├── utils/
+│       │   └── api.js           # Shared /api/* fetch helpers & image URL normalizer
 │       ├── components/
+│       │   ├── ComicBatchViewer.jsx # Responsive Original/Translated batch reader
+│       │   ├── Footer.jsx       # Page footer
 │       │   └── Navbar.jsx       # Fixed top navigation bar
 │       └── pages/
 │           ├── Home.jsx         # Upload form, translation trigger, result preview, jsPDF export
-│           ├── History.jsx      # History grid/list view, side-by-side modal, clear-all action
-│           └── Settings.jsx     # Engine selector and Gemini API key form
+│           ├── History.jsx      # History grid/list view, server-synced rename, delete, modal reader
+│           └── Settings.jsx     # Server-synced engine selector and Gemini API key form
 ├── PERFORMANCE_AUDIT.md         # Performance audit, benchmark progression & optimization roadmap
 └── README.md                    # User-facing setup and usage guide
 ```
@@ -147,9 +160,10 @@ sequenceDiagram
     participant Gemini as Gemini API
     participant GT as Google Translate (4.0.2)
 
-    User->>FE: Select image(s), source/target languages, click "Terjemahkan"
-    FE->>FE: Read translationEngine & geminiApiKey from localStorage
-    FE->>API: POST /process-image (FormData: image[], source, target, engine, apiKey)
+    User->>FE: Select image(s), source/target languages, click "Translate"
+    FE->>API: GET /api/settings (via Vite proxy -> Flask /settings)
+    API-->>FE: { engine, apiKey }
+    FE->>API: POST /api/process-image (FormData: image[], source, target, engine, apiKey)
 
     API->>IP: selectOCR(sourceLang) (Thread-safe LRU cache, max=2)
     IP-->>API: cached ocr instance (MangaOcr or EasyOCR), index, translate_code
@@ -204,31 +218,36 @@ sequenceDiagram
         end
     end
 
-    API->>API: Prepend session metadata to static/history.json & print [Timing] summary
+    API->>API: Prepend session metadata (relative /static/uploads/... paths) atomically to static/history.json & print [Timing] summary
     API-->>FE: HTTP 200 { results: [{ original, translated }, ...] }
-    FE-->>User: Render side-by-side results & show DOWNLOAD PDF button
+    FE-->>User: Render results in ComicBatchViewer & show Download PDF button
 ```
 
 ---
 
 ## 3. Backend Reference (`backend/`)
 
-### 3.1. Flask Server, Startup Warmup & Timing Logs (`app.py`)
+### 3.1. Flask Server, Startup Warmup, Locks & Timing Logs (`app.py`)
 
-`backend/app.py` (203 lines) initializes a Flask application with unrestricted CORS (`CORS(app)`) and manages two relative filesystem paths:
+`backend/app.py` (430 lines) initializes a Flask application with CORS (`CORS(app)`) and manages three relative filesystem paths protected by reentrant locks (`_history_lock = threading.RLock()` and `_settings_lock = threading.RLock()`):
 
 - `UPLOAD_FOLDER = os.path.join("static", "uploads")` (created automatically via `os.makedirs(..., exist_ok=True)`).
 - `HISTORY_FILE = os.path.join("static", "history.json")`.
+- `SETTINGS_FILE = os.path.join("static", "settings.json")`.
 
-Uploaded filenames are sanitized with `werkzeug.utils.secure_filename` and tagged with a request-scoped timestamp (`%Y%m%d_%H%M%S`) and 1-based image index:
+Both `history.json` and `settings.json` are written atomically via `_write_json_atomic()` (write to a UUID-suffixed `.tmp` file in the same directory, close the file handle, then `os.replace()`).
+
+Uploaded filenames are built via `_build_safe_upload_filename()` (preserving valid image extensions in `ALLOWED_IMAGE_EXTENSIONS` before `werkzeug.utils.secure_filename` strips non-ASCII characters, falling back to `image` / `.png`) and tagged with a request-scoped timestamp (`%Y%m%d_%H%M%S`), 6-character hex `req_uid`, and 1-based image index:
 
 ```python
-filename = f"{name}_{timestamp}_{img_idx+1}{ext}"
-# Example source : page01_20261121_065523_1.jpg
-# Example output : output_page01_20261121_065523_1.jpg
+filename = f"{safe_name}_{timestamp}_{req_uid}_{img_idx + 1}{ext}"
+# Example source : page01_20261121_065523_a1b2c3_1.jpg
+# Example output : output_page01_20261121_065523_a1b2c3_1.jpg
 ```
 
-- **Startup YOLOv5 Warmup & Single-Process Server (lines 199–203)**:
+Returned and persisted image URLs use relative paths (`/static/uploads/...`), while `_normalize_history_entry()` / `_normalize_upload_url()` transparently convert legacy `http://127.0.0.1:5000/static/uploads/...` records on `GET /history`.
+
+- **Startup YOLOv5 Warmup & Single-Process Server (lines 426–430)**:
   When executed directly (`if __name__ == '__main__':`), `app.py` pre-warms YOLOv5 by calling `get_yolo_model()` before starting Flask with `use_reloader=False`:
   ```python
   if __name__ == '__main__':
@@ -238,7 +257,7 @@ filename = f"{name}_{timestamp}_{img_idx+1}{ext}"
       app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
   ```
   This prevents Werkzeug from spawning a duplicate parent reloader process while ensuring the first HTTP request does not pay the YOLOv5 initialization cost.
-- **Per-Phase Timing Instrumentation (lines 56–173)**:
+- **Per-Phase Timing Instrumentation (lines 194–316)**:
   `process_image_endpoint()` records wall-clock durations via `time.perf_counter()` across every stage and prints a summary line at the end of each request:
   ```text
   [Timing] total=15.80s | ocr_load=0.00s | read=0.06s | yolo=0.35s | ocr_infer=10.09s | gemini=3.90s | gtrans=0.00s | render=0.70s | save=0.02s | (4 img, 34 bubbles)
@@ -370,24 +389,33 @@ flowchart TD
 
 ### 3.6. Automated Test Suite (`backend/tests/`)
 
-The backend includes 36 unit and integration tests across 6 test files:
+The backend includes 46 unit and integration tests across 8 test files:
 
 | Test File | Tests | Scope Covered |
 | :--- | :---: | :--- |
 | `test_ocr_cache.py` | 6 | Thread-safe LRU cache hits for `MangaOcr` & `EasyOCR`, LRU eviction (`MAX_OCR_CACHE = 2`), invalid language handling, failure recovery |
-| `test_yolo_loader.py` | 6 | Lazy YOLOv5 import behavior, local PyTorch Hub cache (`source='local'`), `force_reload=False` fallback, thread safety, `__main__` warmup & `use_reloader=False` AST checks |
+| `test_yolo_loader.py` | 7 | Lazy YOLOv5 import behavior, local PyTorch Hub cache (`source='local'`), `force_reload=False` fallback, thread safety, `__main__` warmup & `use_reloader=False` AST checks |
 | `test_bubble_extraction.py` | 7 | Zero-copy NumPy slicing for EasyOCR, RGB PIL cropping for Manga-OCR, `torch.inference_mode()`, degenerate box clamping, `timings` recording, `/process-image` integration |
 | `test_manga_ocr_batch.py` | 4 | Area-sorted batching (`batch_size=16`), order restoration, grayscale-RGB preprocessing, cross-page `/process-image` Japanese batching |
 | `test_render_bubbles.py` | 7 | Bitwise pixel-exact equivalence (`np.array_equal`) across standard & tall narrow manga bubbles, font LRU cache hits, binary-search iteration bounds (`<= 7`), zero `textbbox` calls during drawing |
 | `test_text_cleaning_and_hyphenation.py` | 5 | Dot/ellipsis line breaking without hyphens, alphanumeric hyphenation preservation, Japanese dash/tilde stripping in `clean_ocr_text` & `render_bubbles`, Katakana `ー` and Indonesian `-` preservation |
+| `test_history_delete.py` | 2 | Single-batch `DELETE /history/<id>` removal from `history.json`, unreferenced image cleanup, `404` handling for missing batches |
+| `test_wifi_client_server.py` | 8 | Server-side `GET/POST /settings`, `/process-image` fallback to server settings & relative `/static/uploads/` paths, non-ASCII mobile filenames, legacy URL normalization on `GET /history`, `PATCH /history/<id>` rename/validation, relative-path file cleanup on `DELETE`, concurrent thread safety |
 
 ---
 
 ## 4. REST API Specification & Data Schemas
 
-Flask runs on `0.0.0.0:5000` (`debug=True, use_reloader=False`), and frontend requests target `http://127.0.0.1:5000`.
+Flask runs on `0.0.0.0:5000` (`debug=True, use_reloader=False`). Clients (desktop and mobile/tablet over Wi-Fi) access the frontend on port `5173`, and Vite proxies `/api/*` (stripping the `/api` prefix) and `/static/*` directly to `http://127.0.0.1:5000` (configurable via `VITE_BACKEND_URL`) with a 600-second timeout.
 
-### 4.1. `POST /process-image`
+### 4.1. `GET /settings` & `POST|PUT /settings`
+
+Reads and updates shared server-side translation settings persisted in `backend/static/settings.json`:
+
+- **`GET /settings`**: Returns `{"engine": "googletrans" | "gemini", "apiKey": "<string>"}` (defaults to `{"engine": "googletrans", "apiKey": ""}` if absent).
+- **`POST /settings` (or `PUT`)**: Accepts JSON `{ "engine"?: "googletrans" | "gemini", "apiKey"?: "<string>" }` (supporting partial updates), validates fields (`400` on invalid JSON/engine/type), trims `apiKey`, saves atomically, and returns `{"status": "success", "engine": "...", "apiKey": "..."}`.
+
+### 4.2. `POST /process-image`
 
 Processes one or more uploaded comic images through all three phases, writes output images, and prepends a history record to `backend/static/history.json`.
 
@@ -399,16 +427,16 @@ Processes one or more uploaded comic images through all three phases, writes out
   | `image[]` | `File[]` | Yes | Missing field returns `400` (`{"error": "No image provided"}`). |
   | `source` | `string` | Yes | Valid values in `get_language_codes`: `jp`, `ko`, `ch_sim`, `ch_tra`, `en`. Omitting raises `KeyError` (`500`). |
   | `target` | `string` | Yes | Typically `id` or `en`. Omitting raises `KeyError` (`500`). |
-  | `engine` | `string` | No | Defaults to `googletrans`. Accepts `gemini` to enable Gemini batching. |
-  | `apiKey` | `string` | No | Defaults to `""`. Used when `engine == "gemini"`. |
+  | `engine` | `string` | No | Falls back to `settings.json` `engine` if omitted or invalid. |
+  | `apiKey` | `string` | No | Falls back to `settings.json` `apiKey` when `engine == "gemini"` and `apiKey` is empty. |
 
 - **Success Response (`200 OK`)**:
   ```json
   {
     "results": [
       {
-        "original": "http://127.0.0.1:5000/static/uploads/01_20261121_065523_1.jpg",
-        "translated": "http://127.0.0.1:5000/static/uploads/output_01_20261121_065523_1.jpg"
+        "original": "/static/uploads/01_20261121_065523_a1b2c3_1.jpg",
+        "translated": "/static/uploads/output_01_20261121_065523_a1b2c3_1.jpg"
       }
     ]
   }
@@ -420,34 +448,47 @@ Processes one or more uploaded comic images through all three phases, writes out
   }
   ```
 
-### 4.2. `GET /history`
+### 4.3. `GET /history`
 
-Returns the JSON array stored in `backend/static/history.json` (or `[]` if absent/unreadable).
+Returns the JSON array stored in `backend/static/history.json` (or `[]` if absent/unreadable). Each entry is normalized on read so `name` defaults to `""` and legacy `http://127.0.0.1:5000/static/uploads/...` URLs are returned as `/static/uploads/...`.
 
-### 4.3. `POST /clear-history`
+### 4.4. `PATCH|PUT /history/<int:batch_id>`
+
+Updates the custom `name` field of a history batch in `backend/static/history.json`:
+
+- **Request Body**: `{"name": "<string>"}` (trimmed and clamped to 80 characters; returns `400` if missing/non-string, `404` if `batch_id` is not found).
+- **Success Response (`200 OK`)**: `{"status": "success", "id": <batch_id>, "name": "<saved_name>"}`.
+
+### 4.5. `DELETE /history/<int:batch_id>`
+
+Removes the matching batch entry from `backend/static/history.json` and deletes any `original`/`translated` image files in `backend/static/uploads/` no longer referenced by remaining batches (`404` if `batch_id` is not found).
+
+### 4.6. `POST /clear-history`
 
 Overwrites `backend/static/history.json` with `[]` and deletes all regular files (`os.path.isfile`) in `backend/static/uploads/`.
 
 ---
 
-## 5. Frontend Reference (`frontend/src/`)
+## 5. Frontend Reference (`frontend/src/` & `frontend/vite.config.js`)
 
-### 5.1. Routing & Navigation
+### 5.1. Network Access, Proxy & Routing
+- `vite.config.js`: Enables `server.host = true` (port `5173`) and `preview.host = true` (port `4173`) so the dev/preview server binds to LAN interfaces and prints the `Network: http://<LAN_IP>:5173` URL in the terminal. Both `server.proxy` and `preview.proxy` forward `/api/*` (rewritten to `/*`) and `/static/*` to `process.env.VITE_BACKEND_URL || 'http://127.0.0.1:5000'` with `timeout: 600_000` and `proxyTimeout: 600_000`. Using the `/api` prefix keeps React Router SPA routes (`/history`, `/settings`) safe on full-page browser reloads.
 - `App.jsx`: Wraps the app in `BrowserRouter`, renders fixed `Navbar` (`80px` height), and maps routes inside `<main className="pt-[80px]">`:
   - `/` -> `pages/Home.jsx`
   - `/history` -> `pages/History.jsx`
   - `/settings` -> `pages/Settings.jsx`
-- `components/Navbar.jsx`: Displays the `Comic Translator` title (`TradeWinds` font) and active-state route links (`Home`, `History`, `Settings`).
+- `components/Navbar.jsx`: Displays the `Comic Translator` title (`TradeWinds` font) and responsive navigation links (`Home`, `History`, `Settings`).
 
-### 5.2. Pages & Client-Side State
-- **`pages/Home.jsx` (267 lines)**:
-  - Component state: `selectedFiles`, `sourceLang`, `targetLang`, `statusText`, `statusColor`, `isProcessing`, `results`, plus `timerRef` / `startTimeRef` for a 1-second elapsed-time counter.
-  - `translateImage()`: Validates file selection, language dropdowns, and presence of `geminiApiKey` when `translationEngine === 'gemini'`; posts `FormData` to `http://127.0.0.1:5000/process-image`.
-  - `downloadPDF()`: Instantiates `new jsPDF()` (default A4 portrait), loads each `result.translated` URL via `new Image()` with `crossOrigin = 'anonymous'`, scales each image centered on its page, embeds it via `pdf.addImage(img, 'JPEG', x, y, w, h)`, and triggers download as `hasil_gambar.pdf`.
-- **`pages/History.jsx` (147 lines)**:
-  - Fetches `GET http://127.0.0.1:5000/history` on mount, toggles between `'grid'` and `'list'` layouts, opens a side-by-side modal reader on click, and clears history via `POST http://127.0.0.1:5000/clear-history`.
-- **`pages/Settings.jsx` (93 lines)**:
-  - Reads and writes `translationEngine` (`'googletrans'` or `'gemini'`) and `geminiApiKey` in browser `localStorage`.
+### 5.2. API Client & Pages
+- **`utils/api.js`**: Centralizes `/api/*` requests (`fetchSettings`, `saveSettings`, `fetchHistory`, `renameHistoryBatch`, `deleteHistoryBatch`, `clearAllHistory`, `processImages`) and provides `resolveImageUrl()` to normalize any legacy `127.0.0.1:5000` / `localhost:5000` image paths to `/static/...`.
+- **`pages/Home.jsx`**:
+  - Component state: `selectedFiles`, `sourceLang`, `targetLang`, `statusText`, `statusColor`, `isProcessing`, `results`, `resultBatchKey`, plus `timerRef` / `startTimeRef` (cleaned up on unmount).
+  - `translateImage()`: Validates file selection and languages, fetches the latest server settings via `fetchSettings()` (so desktop settings changes apply immediately on mobile/tablet), validates `apiKey` when `engine === 'gemini'`, posts `FormData` via `processImages()` (`/api/process-image`), and renders results inside `ComicBatchViewer`.
+  - `downloadPDF()`: Instantiates `new jsPDF()` (default A4 portrait), loads each same-origin `result.translated` URL via `new Image()` with `crossOrigin = 'anonymous'`, scales each image centered on its page, embeds it via `pdf.addImage(img, 'JPEG', x, y, w, h)`, and triggers download as `translated_comic.pdf`.
+- **`pages/History.jsx`**:
+  - Fetches `/api/history` on mount with loading/error states, toggles between `'grid'` and `'list'` layouts, renames batches via `PATCH /api/history/<id>`, deletes individual batches via `DELETE /api/history/<id>`, opens a side-by-side / mobile-tabbed modal reader (`ComicBatchViewer`) on click, and clears all history via `POST /api/clear-history`.
+- **`pages/Settings.jsx`**:
+  - Loads and saves shared `engine` (`'googletrans'` or `'gemini'`) and `apiKey` directly against `/api/settings` on the desktop server (`backend/static/settings.json`), disabling form controls while loading or saving.
 
 ---
 
@@ -473,16 +514,15 @@ Overwrites `backend/static/history.json` with `[]` and deletes all regular files
 
 The following behaviors were verified directly in the current source code:
 
-1. **Working Directory Sensitivity for Static Paths**: While `model_path` in `image_processor.py` resolves relative to `__file__`, `app.py` and `render_bubbles()` still reference relative paths for `static/uploads`, `static/history.json`, and `static/fonts/...`. Running `python app.py` from `backend/` is still required.
+1. **Working Directory Sensitivity for Static Paths**: While `model_path` in `image_processor.py` resolves relative to `__file__`, `app.py` and `render_bubbles()` still reference relative paths for `static/uploads`, `static/history.json`, `static/settings.json`, and `static/fonts/...`. Running `python app.py` from `backend/` is still required.
 2. **Windows-Only `pathlib` Monkey-Patch**: Line 24 of `image_processor.py` unconditionally sets `pathlib.PosixPath = pathlib.WindowsPath`. On Linux/macOS this raises `NotImplementedError` unless guarded by `if os.name == 'nt':`.
 3. **Phase 2 Translation Reliability & Deduplication (Pending P2.1–P2.3)**:
    - `batch_gemini_translate` and `batch_google_translate` do not yet deduplicate identical bubble texts across pages or skip punctuation-only bubbles before calling external APIs.
    - In `batch_gemini_translate` (lines 188–220), `urllib.request.urlopen(req)` does not specify a `timeout`, and `break` on fatal errors (`429 PerDay`, `401/403`) exits only the inner retry loop rather than aborting remaining chunks.
    - In `batch_google_translate` (line 247), `asyncio.run(_async_google_translate(...))` is not wrapped in `try/except`, so an upstream `googletrans` network error aborts the request with HTTP `500`.
 4. **Comment vs. Implementation Mismatch on Horizontal Expansion**: In `image_processor.py` lines 606–607, the inline comment states `"22% to the left and 22% to the right (1.44x total box_width)"`, while the code computes `text_box_width = int(box_width * 1.22)`.
-5. **Hardcoded `http://127.0.0.1:5000` URLs**: Backend URLs are hardcoded in `Home.jsx`, `History.jsx`, and the URLs written into `backend/static/history.json`.
-6. **Uncleaned Timer on Unmount**: `Home.jsx` starts a `setInterval` in `timerRef` without a cleanup `useEffect` on component unmount (`useEffect` is imported on line 1 but unused).
-7. **Unused Legacy Code & Dependencies**:
+5. **Sequential Request Execution Under Shared GPU/CPU**: While JSON reads/writes (`history.json`, `settings.json`) and upload filenames are thread-safe, Flask runs `POST /process-image` synchronously in request threads without a GPU/CPU job queue, so simultaneous heavy multi-page batches from multiple devices execute concurrently against shared memory/VRAM.
+6. **Unused Legacy Code & Dependencies**:
    - `backend/image_processor.py`: `process_language()` (lines 71–85) and the `translate_code` parameter of `extract_bubbles()` (line 453) are unused.
    - `backend/requirements.txt`: `python-dotenv` and `pandas` are not imported anywhere in the backend.
    - `frontend/`: `src/App.css` is not imported, and `tailwind.config.js` is superseded by Tailwind v4's `@theme` block in `src/index.css`.

@@ -16,6 +16,8 @@ from werkzeug.utils import secure_filename
 import os
 import json
 import time
+import threading
+import uuid
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -24,23 +26,154 @@ CORS(app)
 
 UPLOAD_FOLDER = os.path.join("static", "uploads")
 HISTORY_FILE = os.path.join("static", "history.json")
+SETTINGS_FILE = os.path.join("static", "settings.json")
+VALID_ENGINES = {"googletrans", "gemini"}
+DEFAULT_SETTINGS = {"engine": "googletrans", "apiKey": ""}
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+
+_history_lock = threading.RLock()
+_settings_lock = threading.RLock()
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def load_history():
-    if not os.path.exists(HISTORY_FILE):
-        return []
+
+def _write_json_atomic(filepath, data):
+    parent_dir = os.path.dirname(os.path.abspath(filepath))
+    os.makedirs(parent_dir, exist_ok=True)
+    tmp_path = f"{filepath}.{uuid.uuid4().hex}.tmp"
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, filepath)
     except Exception:
-        return []
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+
+
+def _normalize_upload_url(url):
+    if not url or not isinstance(url, str):
+        return url
+    parsed_path = urlparse(url).path
+    if parsed_path.startswith("/static/uploads/"):
+        return parsed_path
+    if parsed_path.startswith("static/uploads/"):
+        return f"/{parsed_path}"
+    return url
+
+
+def _normalize_history_entry(entry):
+    if not isinstance(entry, dict):
+        return entry
+    normalized = dict(entry)
+    raw_name = entry.get("name")
+    normalized["name"] = raw_name.strip() if isinstance(raw_name, str) else ""
+    normalized_images = []
+    for img in entry.get("images", []):
+        if isinstance(img, dict):
+            img_copy = dict(img)
+            if "original" in img_copy:
+                img_copy["original"] = _normalize_upload_url(img_copy["original"])
+            if "translated" in img_copy:
+                img_copy["translated"] = _normalize_upload_url(img_copy["translated"])
+            normalized_images.append(img_copy)
+    normalized["images"] = normalized_images
+    return normalized
+
+
+def _build_safe_upload_filename(orig_filename, timestamp, req_uid, img_idx):
+    orig_stem, orig_ext = os.path.splitext(orig_filename or "")
+    ext = orig_ext.lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        ext = ".png"
+    safe_name = secure_filename(orig_stem) or "image"
+    return f"{safe_name}_{timestamp}_{req_uid}_{img_idx + 1}{ext}"
+
+
+def load_history():
+    with _history_lock:
+        if not os.path.exists(HISTORY_FILE):
+            return []
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
 
 def save_history(history_data):
-    try:
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"⚠️ Gagal menyimpan history: {e}")
+    with _history_lock:
+        try:
+            _write_json_atomic(HISTORY_FILE, history_data)
+        except Exception as e:
+            print(f"⚠️ Gagal menyimpan history: {e}")
+
+
+def _sanitize_settings(data):
+    if not isinstance(data, dict):
+        return dict(DEFAULT_SETTINGS)
+    engine = data.get("engine")
+    if not isinstance(engine, str) or engine not in VALID_ENGINES:
+        engine = DEFAULT_SETTINGS["engine"]
+    api_key = data.get("apiKey")
+    if not isinstance(api_key, str):
+        api_key = DEFAULT_SETTINGS["apiKey"]
+    else:
+        api_key = api_key.strip()
+    return {"engine": engine, "apiKey": api_key}
+
+
+def load_settings():
+    with _settings_lock:
+        if not os.path.exists(SETTINGS_FILE):
+            return dict(DEFAULT_SETTINGS)
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return _sanitize_settings(data)
+        except Exception:
+            return dict(DEFAULT_SETTINGS)
+
+
+def save_settings(settings_data):
+    with _settings_lock:
+        sanitized = _sanitize_settings(settings_data)
+        _write_json_atomic(SETTINGS_FILE, sanitized)
+        return sanitized
+
+
+@app.route('/settings', methods=['GET'])
+def get_settings_endpoint():
+    return jsonify(load_settings())
+
+
+@app.route('/settings', methods=['POST', 'PUT'])
+def update_settings_endpoint():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'Invalid JSON body'}), 400
+
+    if 'engine' in payload:
+        if not isinstance(payload['engine'], str) or payload['engine'] not in VALID_ENGINES:
+            return jsonify({'error': 'Invalid translation engine'}), 400
+
+    if 'apiKey' in payload and not isinstance(payload['apiKey'], str):
+        return jsonify({'error': 'Invalid API key format'}), 400
+
+    with _settings_lock:
+        current = load_settings()
+        if 'engine' in payload:
+            current['engine'] = payload['engine']
+        if 'apiKey' in payload:
+            current['apiKey'] = payload['apiKey'].strip()
+        saved = save_settings(current)
+
+    return jsonify({'status': 'success', **saved})
+
 
 @app.route('/process-image', methods=['POST'])
 def process_image_endpoint():
@@ -48,10 +181,14 @@ def process_image_endpoint():
         if 'image[]' not in request.files:
             return jsonify({'error': 'No image provided'}), 400
 
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
         sourceLang = request.form['source']
         targetLang = request.form['target']
-        engine = request.form.get('engine', 'googletrans')
-        api_key = request.form.get('apiKey', '')
+        saved_settings = load_settings()
+        form_engine = (request.form.get('engine') or '').strip()
+        engine = form_engine if form_engine in VALID_ENGINES else saved_settings['engine']
+        form_api_key = (request.form.get('apiKey') or '').strip()
+        api_key = form_api_key or (saved_settings['apiKey'] if engine == 'gemini' else '')
         files = request.files.getlist('image[]')
 
         t_total_start = time.perf_counter()
@@ -64,6 +201,7 @@ def process_image_endpoint():
         all_bubbles = []
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        req_uid = uuid.uuid4().hex[:6]
 
         # Fase 1: YOLO + OCR untuk SEMUA gambar dulu, belum translate
         t_read = 0.0
@@ -71,9 +209,7 @@ def process_image_endpoint():
         t_ocr_infer = 0.0
         all_pending_crops = []
         for img_idx, file in enumerate(files):
-            raw_filename = secure_filename(file.filename)
-            name, ext = os.path.splitext(raw_filename)
-            filename = f"{name}_{timestamp}_{img_idx+1}{ext}"
+            filename = _build_safe_upload_filename(file.filename, timestamp, req_uid, img_idx)
             filepath = os.path.join(UPLOAD_FOLDER, filename)
             file.save(filepath)
 
@@ -146,22 +282,29 @@ def process_image_endpoint():
             t_save += time.perf_counter() - t0
 
             results.append({
-                'original': f"http://127.0.0.1:5000/static/uploads/{ctx['filename']}",
-                'translated': f"http://127.0.0.1:5000/static/uploads/output_{ctx['filename']}"
+                'original': f"/static/uploads/{ctx['filename']}",
+                'translated': f"/static/uploads/output_{ctx['filename']}"
             })
 
         # Simpan hasil ke history JSON di backend
-        history_entry = {
-            'id': int(time.time() * 1000),
-            'date': datetime.now().strftime("%d/%m/%Y, %H.%M.%S"),
-            'sourceLang': sourceLang,
-            'targetLang': targetLang,
-            'engine': engine,
-            'images': results
-        }
-        history = load_history()
-        history.insert(0, history_entry)
-        save_history(history)
+        with _history_lock:
+            history = load_history()
+            existing_ids = {entry.get('id') for entry in history if isinstance(entry, dict)}
+            batch_id = int(time.time() * 1000)
+            while batch_id in existing_ids:
+                batch_id += 1
+
+            history_entry = {
+                'id': batch_id,
+                'name': '',
+                'date': datetime.now().strftime("%d/%m/%Y, %H.%M.%S"),
+                'sourceLang': sourceLang,
+                'targetLang': targetLang,
+                'engine': engine,
+                'images': results
+            }
+            history.insert(0, history_entry)
+            save_history(history)
 
         t_total = time.perf_counter() - t_total_start
         print(
@@ -213,39 +356,70 @@ def _delete_unreferenced_batch_files(deleted_entry, remaining_history):
 
 @app.route('/history', methods=['GET'])
 def get_history_endpoint():
-    return jsonify(load_history())
+    with _history_lock:
+        history = load_history()
+    return jsonify([_normalize_history_entry(entry) for entry in history])
+
+
+@app.route('/history/<int:batch_id>', methods=['PATCH', 'PUT'])
+def update_history_batch_endpoint(batch_id):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or not isinstance(payload.get('name'), str):
+        return jsonify({'error': 'Invalid batch name'}), 400
+
+    new_name = payload['name'].strip()[:80]
+
+    with _history_lock:
+        history = load_history()
+        target_entry = None
+        for entry in history:
+            if entry.get('id') == batch_id:
+                target_entry = entry
+                break
+
+        if target_entry is None:
+            return jsonify({'error': 'History batch not found'}), 404
+
+        target_entry['name'] = new_name
+        save_history(history)
+
+    return jsonify({'status': 'success', 'id': batch_id, 'name': new_name})
+
 
 @app.route('/history/<int:batch_id>', methods=['DELETE'])
 def delete_history_batch_endpoint(batch_id):
-    history = load_history()
-    deleted_entry = None
-    remaining_history = []
+    with _history_lock:
+        history = load_history()
+        deleted_entry = None
+        remaining_history = []
 
-    for entry in history:
-        if entry.get('id') == batch_id and deleted_entry is None:
-            deleted_entry = entry
-        else:
-            remaining_history.append(entry)
+        for entry in history:
+            if entry.get('id') == batch_id and deleted_entry is None:
+                deleted_entry = entry
+            else:
+                remaining_history.append(entry)
 
-    if deleted_entry is None:
-        return jsonify({'error': 'History batch not found'}), 404
+        if deleted_entry is None:
+            return jsonify({'error': 'History batch not found'}), 404
 
-    save_history(remaining_history)
-    _delete_unreferenced_batch_files(deleted_entry, remaining_history)
+        save_history(remaining_history)
+        _delete_unreferenced_batch_files(deleted_entry, remaining_history)
     return jsonify({'status': 'success', 'id': batch_id})
 
 @app.route('/clear-history', methods=['POST'])
 def clear_history_endpoint():
-    save_history([])
-    
-    # Hapus semua file gambar di dalam folder static/uploads
-    try:
-        for filename in os.listdir(UPLOAD_FOLDER):
-            file_path = os.path.join(UPLOAD_FOLDER, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-    except Exception as e:
-        print(f"⚠️ Gagal membersihkan folder uploads: {e}")
+    with _history_lock:
+        save_history([])
+        
+        # Hapus semua file gambar di dalam folder static/uploads
+        try:
+            if os.path.isdir(UPLOAD_FOLDER):
+                for filename in os.listdir(UPLOAD_FOLDER):
+                    file_path = os.path.join(UPLOAD_FOLDER, filename)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+        except Exception as e:
+            print(f"⚠️ Gagal membersihkan folder uploads: {e}")
         
     return jsonify({'status': 'success'})
 

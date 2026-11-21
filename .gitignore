@@ -3,6 +3,7 @@ backend/.venv/
 backend/__pycache__/
 backend/static/uploads
 backend/static/history.json
+backend/static/settings.json
 *.pyc
 
 # Node
