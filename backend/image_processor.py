@@ -117,10 +117,19 @@ def selectOCR(sourceLang):
             _ocr_cache.popitem(last=False)
         return ocr_instance, index, translate_code
 
+_DASH_TILDE_BETWEEN_ASCII_RE = re.compile(r'(?<=[A-Za-z0-9])(?:[―—–─━‒−~～〜]+|-{2,})(?=[A-Za-z0-9])')
+_DASH_TILDE_RE = re.compile(r'[―—–─━‒−~～〜]+|-{2,}')
+_REPEATED_CHOONPU_RE = re.compile(r'ー{2,}')
+_NON_KATAKANA_CHOONPU_RE = re.compile(r'(?<![\u30A1-\u30F6])ー')
+
 def clean_ocr_text(ocr_text):
     if not ocr_text:
         return ""
     cleaned_text = re.sub(r'\bLai\b', '!', ocr_text)
+    cleaned_text = _DASH_TILDE_BETWEEN_ASCII_RE.sub(' ', cleaned_text)
+    cleaned_text = _DASH_TILDE_RE.sub('', cleaned_text)
+    cleaned_text = _REPEATED_CHOONPU_RE.sub('', cleaned_text)
+    cleaned_text = _NON_KATAKANA_CHOONPU_RE.sub('', cleaned_text)
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
     return cleaned_text
 
@@ -273,7 +282,16 @@ def break_word(word, draw, font, max_width, target_lang, remaining_lines=None, f
     current_part = ""
     for i, syl in enumerate(syllables):
         is_last_syl = (i == len(syllables) - 1)
-        test_part = current_part + syl + ("" if is_last_syl else "-")
+        next_syl = "" if is_last_syl else syllables[i + 1]
+        needs_hyphen_after_syl = (
+            not is_last_syl
+            and bool(syl)
+            and bool(next_syl)
+            and syl[-1].isalnum()
+            and next_syl[0].isalnum()
+        )
+        suffix_after_syl = "-" if needs_hyphen_after_syl else ""
+        test_part = current_part + syl + suffix_after_syl
         bbox = draw.textbbox((0, 0), test_part, font=font)
         if (bbox[2] - bbox[0]) <= max_width:
             current_part += syl
@@ -281,10 +299,16 @@ def break_word(word, draw, font, max_width, target_lang, remaining_lines=None, f
             if not current_part:
                 if fail_on_overflow:
                     return None
-                lines.append(syl + ("" if is_last_syl else "-"))
+                lines.append(syl + suffix_after_syl)
                 current_part = ""
             else:
-                lines.append(current_part + "-")
+                needs_break_hyphen = (
+                    bool(current_part)
+                    and bool(syl)
+                    and current_part[-1].isalnum()
+                    and syl[0].isalnum()
+                )
+                lines.append(current_part + ("-" if needs_break_hyphen else ""))
                 current_part = syl
             if remaining_lines is not None:
                 min_needed = len(lines) + (1 if (current_part or not is_last_syl) else 0)
@@ -563,7 +587,11 @@ def render_bubbles(img_pil, bubbles, translations, targetLang,
             translated = translations.get(b["id"]) or "[Teks tidak terbaca]"
             translated = re.sub(r'\bLai\b', '!', translated)
             translated = translated.replace('．', '.').replace('…', '...').replace('。', '.')
+            translated = _DASH_TILDE_BETWEEN_ASCII_RE.sub(' ', translated)
+            translated = _DASH_TILDE_RE.sub('', translated)
             translated = re.sub(r'([.?!])([a-zA-Z])', r'\1 \2', translated)
+            if translated.strip():
+                translated = re.sub(r'\s+', ' ', translated).strip()
         else:
             translated = "[Teks tidak terbaca]"
 
