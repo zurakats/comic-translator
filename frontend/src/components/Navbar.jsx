@@ -32,8 +32,8 @@ const Navbar = () => {
   const getLinkClass = (path, isMobile = false) => {
     const isActive = location.pathname === path;
     const base = isMobile
-      ? 'flex items-center gap-3 w-full px-4 py-3 rounded-xl transition-all duration-300 font-winky tracking-wider text-lg'
-      : 'flex items-center gap-2 px-4 lg:px-5 py-2.5 rounded-full transition-all duration-300 font-winky tracking-wider';
+      ? 'flex items-center gap-3 w-full px-4 py-3 rounded-xl transition-colors duration-300 font-winky tracking-wider text-lg'
+      : 'flex items-center gap-2 px-4 lg:px-5 py-2.5 rounded-full transition-colors duration-300 font-winky tracking-wider';
 
     return `${base} ${
       isActive
@@ -44,7 +44,7 @@ const Navbar = () => {
 
   return (
     <>
-      <header className="z-[99] fixed top-0 w-full bg-brand-dark/95 backdrop-blur-md border-b border-white/10 shadow-xl h-[80px]">
+      <header className="z-[99] fixed top-0 w-full bg-brand-dark md:bg-brand-dark/95 md:backdrop-blur-md border-b border-white/10 shadow-xl h-[80px]">
         <div className="w-full h-full flex items-center justify-between px-4 sm:px-6">
           {/* Left Side: Empty flex space to center the logo on large screens */}
           <div className="hidden lg:block lg:flex-1" />
@@ -90,14 +90,14 @@ const Navbar = () => {
       {isMenuOpen && (
         <>
           <div
-            className="fixed inset-0 top-[80px] bg-black/60 backdrop-blur-xs md:hidden z-[97]"
+            className="fixed inset-0 top-[80px] bg-black/70 md:hidden z-[97]"
             onClick={() => setIsMenuOpen(false)}
             aria-hidden="true"
           />
           <nav
             id="mobile-nav-menu"
             aria-label="Mobile navigation"
-            className="md:hidden fixed top-[80px] left-0 right-0 z-[98] bg-brand-dark/98 backdrop-blur-md border-b border-white/10 shadow-2xl px-4 py-4"
+            className="md:hidden fixed top-[80px] left-0 right-0 z-[98] bg-brand-dark border-b border-white/10 shadow-2xl px-4 py-4"
           >
             <div className="flex flex-col gap-2">
               {NAV_ITEMS.map(({ path, label, icon: Icon }) => (

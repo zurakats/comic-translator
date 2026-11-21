@@ -9,14 +9,14 @@ This document describes the architecture, 3-phase processing pipeline, backend a
 1. [System Architecture & Directory Layout](#1-system-architecture--directory-layout)
 2. [3-Phase Processing Pipeline](#2-3-phase-processing-pipeline)
 3. [Backend Reference (`backend/`)](#3-backend-reference-backend)
-   - [3.1. Flask Server, Startup Warmup & Timing Logs (`app.py`)](#31-flask-server-startup-warmup--timing-logs-apppy)
+   - [3.1. Flask Server, Startup Warmup, Locks & Timing Logs (`app.py`)](#31-flask-server-startup-warmup-locks--timing-logs-apppy)
    - [3.2. Global Initialization, Lazy YOLOv5 Loader & OCR Cache (`image_processor.py`)](#32-global-initialization-lazy-yolov5-loader--ocr-cache-image_processorpy)
    - [3.3. Phase 1: Bubble Detection, Batched OCR & Text Cleaning (`detect_bubbles`, `batch_manga_ocr`, `extract_bubbles`, `clean_ocr_text`)](#33-phase-1-bubble-detection-batched-ocr--text-cleaning-detect_bubbles-batch_manga_ocr-extract_bubbles-clean_ocr_text)
    - [3.4. Phase 2: Gemini Batch Translation & Async Google Translate Fallback (`batch_gemini_translate`, `batch_google_translate`)](#34-phase-2-gemini-batch-translation--async-google-translate-fallback-batch_gemini_translate-batch_google_translate)
    - [3.5. Phase 3: Layout Calculation, Hyphenation & Rendering (`get_font`, `_split_syllables`, `break_word`, `wrap_text`, `_try_fit_layout`, `render_bubbles`)](#35-phase-3-layout-calculation-hyphenation--rendering-get_font-_split_syllables-break_word-wrap_text-_try_fit_layout-render_bubbles)
    - [3.6. Automated Test Suite (`backend/tests/`)](#36-automated-test-suite-backendtests)
 4. [REST API Specification & Data Schemas](#4-rest-api-specification--data-schemas)
-5. [Frontend Reference (`frontend/src/`)](#5-frontend-reference-frontendsrc)
+5. [Frontend Reference (`frontend/src/` & `frontend/vite.config.js`)](#5-frontend-reference-frontendsrc--frontendviteconfigjs)
 6. [Extension Guides](#6-extension-guides)
 7. [Known Technical Notes & Limitations](#7-known-technical-notes--limitations)
 
@@ -26,7 +26,7 @@ This document describes the architecture, 3-phase processing pipeline, backend a
 
 The application uses a local two-tier client-server layout designed to run either on a single desktop or across devices (smartphones/tablets) on the same Wi-Fi network via a single Vite proxy entrypoint, without an external database, authentication, or task queue:
 
-- **Frontend (`frontend/`)**: A React 19 Single-Page Application (Vite 8, React Router DOM 7, Tailwind CSS 4). Vite binds to LAN interfaces (`host: true`, port `5173`) and proxies `/api/*` (rewritten to Flask root routes) and `/static/*` requests to the desktop Flask server (`http://127.0.0.1:5000`, `600s` proxy timeout). The UI delegates all settings, translation requests, and history state to the backend via `src/utils/api.js`, renders responsive views (`ComicBatchViewer`), and generates PDF downloads client-side via `jsPDF`.
+- **Frontend (`frontend/`)**: A React 19 Single-Page Application (Vite 8, React Router DOM 7, Tailwind CSS 4). Vite binds to LAN interfaces (`host: true`, port `5173`) and proxies `/api/*` (rewritten to Flask root routes) and `/static/*` requests to the desktop Flask server (`http://127.0.0.1:5000`, `600s` proxy timeout). The UI delegates all settings, translation requests, and history state to the backend via `src/utils/api.js`, renders memoized responsive views (`ComicBatchViewer`) tuned for smooth mobile scrolling, and generates PDF downloads client-side via dynamically imported `jsPDF`.
 - **Backend (`backend/`)**: A Flask server running synchronous 3-phase image processing pipelines using PyTorch (YOLOv5), OpenCV, Manga-OCR (cross-page batched inference), EasyOCR (zero-copy NumPy views), `urllib.request` (Gemini REST API), `googletrans==4.0.2` (async batch fallback), `pyphen`, and Pillow. Uploaded images, rendered outputs, shared history metadata (`static/history.json`), and shared server settings (`static/settings.json`) are persisted directly on the desktop filesystem using thread-safe atomic writes.
 
 ```mermaid
@@ -84,10 +84,10 @@ scan-translator-v2/
 ├── docs/
 │   └── ARCHITECTURE.md          # Technical & codebase reference
 ├── backend/
-│   ├── app.py                   # Flask app, routes, locks, atomic JSON, 3-phase orchestration (430 LOC)
+│   ├── app.py                   # Flask app, routes, cache headers, locks, atomic JSON, 3-phase orchestration (441 LOC)
 │   ├── image_processor.py       # YOLOv5 loader, OCR cache, batched Manga-OCR, translation, rendering (669 LOC)
 │   ├── requirements.txt         # Python dependency list (12 packages)
-│   ├── tests/                   # Unit & integration test suite (8 modules, 46 tests)
+│   ├── tests/                   # Unit & integration test suite (8 modules, 47 tests)
 │   │   ├── test_bubble_extraction.py
 │   │   ├── test_history_delete.py
 │   │   ├── test_manga_ocr_batch.py
@@ -115,7 +115,7 @@ scan-translator-v2/
 │       ├── utils/
 │       │   └── api.js           # Shared /api/* fetch helpers & image URL normalizer
 │       ├── components/
-│       │   ├── ComicBatchViewer.jsx # Responsive Original/Translated batch reader
+│       │   ├── ComicBatchViewer.jsx # Memoized responsive Original/Translated batch reader
 │       │   ├── Footer.jsx       # Page footer
 │       │   └── Navbar.jsx       # Fixed top navigation bar
 │       └── pages/
@@ -229,7 +229,7 @@ sequenceDiagram
 
 ### 3.1. Flask Server, Startup Warmup, Locks & Timing Logs (`app.py`)
 
-`backend/app.py` (430 lines) initializes a Flask application with CORS (`CORS(app)`) and manages three relative filesystem paths protected by reentrant locks (`_history_lock = threading.RLock()` and `_settings_lock = threading.RLock()`):
+`backend/app.py` (441 lines) initializes a Flask application with CORS (`CORS(app)`) and manages three relative filesystem paths protected by reentrant locks (`_history_lock = threading.RLock()` and `_settings_lock = threading.RLock()`):
 
 - `UPLOAD_FOLDER = os.path.join("static", "uploads")` (created automatically via `os.makedirs(..., exist_ok=True)`).
 - `HISTORY_FILE = os.path.join("static", "history.json")`.
@@ -247,7 +247,9 @@ filename = f"{safe_name}_{timestamp}_{req_uid}_{img_idx + 1}{ext}"
 
 Returned and persisted image URLs use relative paths (`/static/uploads/...`), while `_normalize_history_entry()` / `_normalize_upload_url()` transparently convert legacy `http://127.0.0.1:5000/static/uploads/...` records on `GET /history`.
 
-- **Startup YOLOv5 Warmup & Single-Process Server (lines 426–430)**:
+- **Immutable Static Upload Caching (lines 40–48)**:
+  `add_static_upload_cache_headers()` (`@app.after_request`) attaches `Cache-Control: public, max-age=86400, immutable` on `200 OK` `GET /static/uploads/*` responses so mobile/Wi-Fi browsers do not re-download previously fetched comic pages (safe because upload filenames include a timestamp and per-request UUID and are never mutated in place), while keeping API JSON routes (`/settings`, `/history`, etc.) uncached.
+- **Startup YOLOv5 Warmup & Single-Process Server (lines 437–441)**:
   When executed directly (`if __name__ == '__main__':`), `app.py` pre-warms YOLOv5 by calling `get_yolo_model()` before starting Flask with `use_reloader=False`:
   ```python
   if __name__ == '__main__':
@@ -257,7 +259,7 @@ Returned and persisted image URLs use relative paths (`/static/uploads/...`), wh
       app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
   ```
   This prevents Werkzeug from spawning a duplicate parent reloader process while ensuring the first HTTP request does not pay the YOLOv5 initialization cost.
-- **Per-Phase Timing Instrumentation (lines 194–316)**:
+- **Per-Phase Timing Instrumentation (lines 205–327)**:
   `process_image_endpoint()` records wall-clock durations via `time.perf_counter()` across every stage and prints a summary line at the end of each request:
   ```text
   [Timing] total=15.80s | ocr_load=0.00s | read=0.06s | yolo=0.35s | ocr_infer=10.09s | gemini=3.90s | gtrans=0.00s | render=0.70s | save=0.02s | (4 img, 34 bubbles)
@@ -389,7 +391,7 @@ flowchart TD
 
 ### 3.6. Automated Test Suite (`backend/tests/`)
 
-The backend includes 46 unit and integration tests across 8 test files:
+The backend includes 47 unit and integration tests across 8 test files:
 
 | Test File | Tests | Scope Covered |
 | :--- | :---: | :--- |
@@ -400,7 +402,7 @@ The backend includes 46 unit and integration tests across 8 test files:
 | `test_render_bubbles.py` | 7 | Bitwise pixel-exact equivalence (`np.array_equal`) across standard & tall narrow manga bubbles, font LRU cache hits, binary-search iteration bounds (`<= 7`), zero `textbbox` calls during drawing |
 | `test_text_cleaning_and_hyphenation.py` | 5 | Dot/ellipsis line breaking without hyphens, alphanumeric hyphenation preservation, Japanese dash/tilde stripping in `clean_ocr_text` & `render_bubbles`, Katakana `ー` and Indonesian `-` preservation |
 | `test_history_delete.py` | 2 | Single-batch `DELETE /history/<id>` removal from `history.json`, unreferenced image cleanup, `404` handling for missing batches |
-| `test_wifi_client_server.py` | 8 | Server-side `GET/POST /settings`, `/process-image` fallback to server settings & relative `/static/uploads/` paths, non-ASCII mobile filenames, legacy URL normalization on `GET /history`, `PATCH /history/<id>` rename/validation, relative-path file cleanup on `DELETE`, concurrent thread safety |
+| `test_wifi_client_server.py` | 9 | Server-side `GET/POST /settings`, `/process-image` fallback to server settings & relative `/static/uploads/` paths, non-ASCII mobile filenames, legacy URL normalization on `GET /history`, `PATCH /history/<id>` rename/validation, relative-path file cleanup on `DELETE`, concurrent thread safety, and `/static/uploads/*` immutable `Cache-Control` headers |
 
 ---
 
@@ -467,6 +469,10 @@ Removes the matching batch entry from `backend/static/history.json` and deletes 
 
 Overwrites `backend/static/history.json` with `[]` and deletes all regular files (`os.path.isfile`) in `backend/static/uploads/`.
 
+### 4.7. Static Upload Caching (`GET /static/uploads/<filename>`)
+
+Successful (`200 OK`) `GET` requests under `/static/uploads/` return `Cache-Control: public, max-age=86400, immutable` via `add_static_upload_cache_headers()`. JSON API endpoints (`/settings`, `/history`, etc.) remain uncached.
+
 ---
 
 ## 5. Frontend Reference (`frontend/src/` & `frontend/vite.config.js`)
@@ -477,18 +483,25 @@ Overwrites `backend/static/history.json` with `[]` and deletes all regular files
   - `/` -> `pages/Home.jsx`
   - `/history` -> `pages/History.jsx`
   - `/settings` -> `pages/Settings.jsx`
-- `components/Navbar.jsx`: Displays the `Comic Translator` title (`TradeWinds` font) and responsive navigation links (`Home`, `History`, `Settings`).
+- `components/Navbar.jsx`: Displays the `Comic Translator` title (`TradeWinds` font) and responsive navigation links (`Home`, `History`, `Settings`). Uses solid dark surfaces on mobile (`bg-brand-dark`, `bg-black/70` overlay) and enables `backdrop-blur-md` on `md:` desktop.
 
-### 5.2. API Client & Pages
+### 5.2. API Client, Components & Pages
 - **`utils/api.js`**: Centralizes `/api/*` requests (`fetchSettings`, `saveSettings`, `fetchHistory`, `renameHistoryBatch`, `deleteHistoryBatch`, `clearAllHistory`, `processImages`) and provides `resolveImageUrl()` to normalize any legacy `127.0.0.1:5000` / `localhost:5000` image paths to `/static/...`.
+- **`components/ComicBatchViewer.jsx`**: Wrapped in `React.memo` to prevent unnecessary re-renders when parent state changes (e.g., timer ticks or batch renaming). Uses `[contain:layout_style]`, `decoding="async"`, and active-view-aware `loading` (`eager` only for the first 2 pages of the active mobile view, `lazy` for remaining and hidden-tab pages), plus a solid `bg-black/95` sticky mobile toggle pill.
 - **`pages/Home.jsx`**:
   - Component state: `selectedFiles`, `sourceLang`, `targetLang`, `statusText`, `statusColor`, `isProcessing`, `results`, `resultBatchKey`, plus `timerRef` / `startTimeRef` (cleaned up on unmount).
+  - Mobile-first positioning groups `#imageInfo` (`role="status"`), upload button, language pair dropdowns, and `#button-translate` inside a dark card container below `md` while keeping the open hero layout at `md:` and up. Only the center hero banner (`hero-banner (3).jpg`, `fetchPriority="high"`) renders on mobile (`hidden md:block` for the two side banners).
   - `translateImage()`: Validates file selection and languages, fetches the latest server settings via `fetchSettings()` (so desktop settings changes apply immediately on mobile/tablet), validates `apiKey` when `engine === 'gemini'`, posts `FormData` via `processImages()` (`/api/process-image`), and renders results inside `ComicBatchViewer`.
-  - `downloadPDF()`: Instantiates `new jsPDF()` (default A4 portrait), loads each same-origin `result.translated` URL via `new Image()` with `crossOrigin = 'anonymous'`, scales each image centered on its page, embeds it via `pdf.addImage(img, 'JPEG', x, y, w, h)`, and triggers download as `translated_comic.pdf`.
+  - `downloadPDF()`: Dynamically imports `jsPDF` (`await import('jspdf')`) on demand, loads each same-origin `result.translated` URL via `new Image()` with `crossOrigin = 'anonymous'`, scales each image centered on an A4 page, embeds it via `pdf.addImage(img, 'JPEG', x, y, w, h)`, and triggers download as `translated_comic.pdf`.
 - **`pages/History.jsx`**:
-  - Fetches `/api/history` on mount with loading/error states, toggles between `'grid'` and `'list'` layouts, renames batches via `PATCH /api/history/<id>`, deletes individual batches via `DELETE /api/history/<id>`, opens a side-by-side / mobile-tabbed modal reader (`ComicBatchViewer`) on click, and clears all history via `POST /api/clear-history`.
+  - Fetches `/api/history` on mount with loading/error states, toggles between `'grid'` and `'list'` layouts (`loading="lazy"`, `decoding="async"`, `[contain:layout_style_paint]` on cards), renames batches via `PATCH /api/history/<id>`, deletes individual batches via `DELETE /api/history/<id>`, opens a side-by-side / mobile-tabbed modal reader (`ComicBatchViewer` inside `overscroll-contain`) on click, and clears all history via `POST /api/clear-history`.
 - **`pages/Settings.jsx`**:
-  - Loads and saves shared `engine` (`'googletrans'` or `'gemini'`) and `apiKey` directly against `/api/settings` on the desktop server (`backend/static/settings.json`), disabling form controls while loading or saving.
+  - Loads and saves shared `engine` (`'googletrans'` or `'gemini'`) and `apiKey` directly against `/api/settings` on the desktop server (`backend/static/settings.json`), disabling form controls while loading or saving, and hides side hero banners on mobile (`hidden md:block`).
+
+### 5.3. Mobile Performance & Rendering Optimizations
+- **Eliminated Mobile `backdrop-blur-*` Compositing**: Fixed (`Navbar`), sticky (`ComicBatchViewer`), repeated (`History` cards), modal, and mobile form cards (`Home`, `Settings`) use opaque or semi-opaque solid backgrounds on mobile (`< md`), reserving `backdrop-blur-*` for `md:` desktop where appropriate.
+- **On-Demand PDF Code Splitting**: Splitting `jsPDF` (`html2canvas` / `purify`) out of the initial entry chunk reduces the main bundle from `667.51 kB` to `268.71 kB` (gzip `84.24 kB`), with `jspdf.es.min` (`399.32 kB`) loaded only when downloading PDFs.
+- **Font, Viewport & CSS Containment (`src/index.css`)**: Configures `font-display: swap` on `WinkyRough` and `TradeWinds`, `touch-action: manipulation` on `button, a, select, label[for]`, `100dvh` hero/viewport height, `contain: strict` on `.hero`, `overscroll-contain` on the modal reader, and explicit CSS property transitions instead of `transition-all`.
 
 ---
 

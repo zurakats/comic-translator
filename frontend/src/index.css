@@ -13,6 +13,7 @@
     src: url('/fonts/Winky_Rough/WinkyRough-Regular.ttf') format('truetype');
     font-style: normal;
     font-weight: normal;
+    font-display: swap;
 }
 
 @font-face {
@@ -20,11 +21,16 @@
     src: url('/fonts/Trade_Winds/TradeWinds-Regular.ttf') format('truetype');
     font-style: normal;
     font-weight: normal;
+    font-display: swap;
 }
 
 * {
     box-sizing: border-box;
     font-family: 'WinkyRough', sans-serif;
+}
+
+button, a, select, label[for] {
+    touch-action: manipulation;
 }
 
 html, body {
@@ -62,6 +68,7 @@ main {
     display: flex;
     justify-content: center;
     align-items: center;
+    contain: strict;
     z-index: -10;
 }
 

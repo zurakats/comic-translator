@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { jsPDF } from 'jspdf';
 import { Download, Upload, RefreshCw } from 'lucide-react';
 import ComicBatchViewer from '../components/ComicBatchViewer';
 import Footer from '../components/Footer';
@@ -125,6 +124,7 @@ const Home = () => {
       return;
     }
 
+    const { jsPDF } = await import('jspdf');
     const pdf = new jsPDF();
     const promises = imageUrls.map((url) => {
       return new Promise((resolve) => {
@@ -159,7 +159,7 @@ const Home = () => {
   return (
     <>
       <div className="flex flex-col w-full min-h-[calc(100dvh-80px)] shrink-0 justify-center items-center z-10 relative px-4 py-6 sm:px-6 md:py-10 font-winky">
-        <div className="w-full max-w-[420px] flex flex-col items-center gap-4 bg-black/65 backdrop-blur-md border border-white/15 rounded-2xl p-5 shadow-2xl md:max-w-none md:w-auto md:bg-transparent md:backdrop-blur-none md:border-0 md:rounded-none md:p-0 md:shadow-none md:gap-5">
+        <div className="w-full max-w-[420px] flex flex-col items-center gap-4 bg-[#141414]/88 border border-white/15 rounded-2xl p-5 shadow-2xl md:max-w-none md:w-auto md:bg-transparent md:border-0 md:rounded-none md:p-0 md:shadow-none md:gap-5">
           <div
             id="imageInfo"
             role="status"
@@ -199,7 +199,7 @@ const Home = () => {
               value={sourceLang}
               onChange={(e) => setSourceLang(e.target.value)}
               disabled={isProcessing}
-              className="h-[50px] md:h-[55px] w-full md:w-[250px] px-4 text-base md:text-[18px] bg-white border-2 border-brand-blue rounded-xl md:rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-all duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
+              className="h-[50px] md:h-[55px] w-full md:w-[250px] px-4 text-base md:text-[18px] bg-white border-2 border-brand-blue rounded-xl md:rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-[border-color,box-shadow] duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
             >
               <option value="">- Source Language -</option>
               <option value="jp">Japanese</option>
@@ -222,7 +222,7 @@ const Home = () => {
               value={targetLang}
               onChange={(e) => setTargetLang(e.target.value)}
               disabled={isProcessing}
-              className="h-[50px] md:h-[55px] w-full md:w-[250px] px-4 text-base md:text-[18px] bg-white border-2 border-brand-blue rounded-xl md:rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-all duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
+              className="h-[50px] md:h-[55px] w-full md:w-[250px] px-4 text-base md:text-[18px] bg-white border-2 border-brand-blue rounded-xl md:rounded-[10px] shadow-sm text-brand-dark focus:outline-none focus:border-brand-blue-hover focus:ring-4 focus:ring-brand-blue/20 transition-[border-color,box-shadow] duration-300 disabled:opacity-50 cursor-pointer hover:shadow-md"
             >
               <option value="">- Target Language -</option>
               <option value="id">Indonesian</option>
@@ -235,7 +235,7 @@ const Home = () => {
             id="button-translate"
             onClick={translateImage}
             disabled={isProcessing}
-            className="w-full md:w-[220px] h-[52px] md:h-[53px] mt-1 md:mt-0 text-lg md:text-[18px] tracking-wide bg-brand-blue border-2 border-brand-blue rounded-xl md:rounded-[5px] shadow-[0_6px_18px_rgba(38,123,250,0.3)] md:shadow-[4px_4px_4px_rgba(0,0,0,0.3)] cursor-pointer text-white transition-all duration-300 ease-out hover:bg-white hover:text-brand-blue-hover hover:border-brand-blue active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full md:w-[220px] h-[52px] md:h-[53px] mt-1 md:mt-0 text-lg md:text-[18px] tracking-wide bg-brand-blue border-2 border-brand-blue rounded-xl md:rounded-[5px] shadow-[0_6px_18px_rgba(38,123,250,0.3)] md:shadow-[4px_4px_4px_rgba(0,0,0,0.3)] cursor-pointer text-white transition-[background-color,color,border-color,transform] duration-300 ease-out hover:bg-white hover:text-brand-blue-hover hover:border-brand-blue active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isProcessing ? 'Processing...' : 'Translate'}
           </button>
@@ -244,9 +244,9 @@ const Home = () => {
 
       {/* Hero Background */}
       <div className="hero">
-        <img src="/assets/hero-banner (2).jpg" alt="manga page 2" />
-        <img src="/assets/hero-banner (3).jpg" alt="manga page 3" />
-        <img src="/assets/hero-banner (1).jpg" alt="manga page 1" />
+        <img src="/assets/hero-banner (2).jpg" alt="manga page 2" decoding="async" className="hidden md:block" />
+        <img src="/assets/hero-banner (3).jpg" alt="manga page 3" decoding="async" fetchPriority="high" />
+        <img src="/assets/hero-banner (1).jpg" alt="manga page 1" decoding="async" className="hidden md:block" />
       </div>
 
       {/* Results Section */}
@@ -264,7 +264,7 @@ const Home = () => {
                     id="downloadPdfBtn"
                     onClick={downloadPDF}
                     disabled={isProcessing}
-                    className="inline-flex items-center justify-center gap-2 min-h-[44px] px-5 py-2.5 md:min-h-0 md:px-4 md:py-2 text-sm font-semibold tracking-wide bg-black/70 text-white border border-white/20 rounded-xl md:rounded-lg shadow-md cursor-pointer transition-all duration-200 hover:bg-brand-blue hover:border-brand-blue active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="inline-flex items-center justify-center gap-2 min-h-[44px] px-5 py-2.5 md:min-h-0 md:px-4 md:py-2 text-sm font-semibold tracking-wide bg-black/70 text-white border border-white/20 rounded-xl md:rounded-lg shadow-md cursor-pointer transition-colors duration-200 hover:bg-brand-blue hover:border-brand-blue active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Download size={16} />
                     <span>Download PDF</span>

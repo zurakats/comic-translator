@@ -380,6 +380,38 @@ class TestWifiClientServerMode(unittest.TestCase):
         self.assertIn(final_settings["engine"], {"gemini", "googletrans"})
         self.assertTrue(final_settings["apiKey"].startswith("key-"))
 
+    def test_static_uploads_set_immutable_cache_headers_and_api_routes_do_not(self):
+        static_dir = os.path.join(self.temp_dir.name, "static")
+        uploads_dir = os.path.join(static_dir, "uploads")
+        os.makedirs(uploads_dir, exist_ok=True)
+        img_path = os.path.join(uploads_dir, "cached_page.png")
+        with open(img_path, "wb") as f:
+            f.write(self._make_image_bytes().getvalue())
+
+        orig_static_folder = self.app_mod.app.static_folder
+        try:
+            self.app_mod.app.static_folder = static_dir
+            with (
+                patch.object(self.app_mod, "SETTINGS_FILE", self.settings_file),
+                patch.object(self.app_mod, "HISTORY_FILE", self.history_file),
+            ):
+                img_res = self.client.get("/static/uploads/cached_page.png")
+                self.assertEqual(img_res.status_code, 200)
+                cache_header = img_res.headers.get("Cache-Control", "")
+                self.assertIn("max-age=86400", cache_header)
+                self.assertIn("immutable", cache_header)
+                img_res.close()
+
+                settings_res = self.client.get("/settings")
+                self.assertEqual(settings_res.status_code, 200)
+                self.assertNotIn("immutable", settings_res.headers.get("Cache-Control", ""))
+
+                history_res = self.client.get("/history")
+                self.assertEqual(history_res.status_code, 200)
+                self.assertNotIn("immutable", history_res.headers.get("Cache-Control", ""))
+        finally:
+            self.app_mod.app.static_folder = orig_static_folder
+
 
 if __name__ == "__main__":
     unittest.main()

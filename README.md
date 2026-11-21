@@ -99,7 +99,7 @@ The application consists of two processes that run locally: a **Python Flask bac
    - Select either **Google Translate (Free & Default)** or **Google Gemini AI (More Natural & Context-Aware)**.
    - If you select Google Gemini AI, paste your API key from [Google AI Studio](https://aistudio.google.com/) and click **SAVE SETTINGS**. Your selection and API key are saved centrally on the desktop server (`backend/static/settings.json`), so other devices on the same Wi-Fi can immediately translate with Gemini without re-entering the key.
 2. **Upload comic pages**:
-   - On the **Home** page, click **UPLOAD IMAGES** and select one or more image files from your desktop or mobile gallery.
+   - On the **Home** page (grouped in a compact mobile control card on smaller screens), click **UPLOAD IMAGES** and select one or more image files from your desktop or mobile gallery.
 3. **Select languages**:
    - Choose the source language from the left dropdown (`Japanese`, `Korean`, `Chinese (Simplified)`, or `English`).
    - Choose the target language from the right dropdown (`Indonesian` or `English`).
@@ -107,7 +107,7 @@ The application consists of two processes that run locally: a **Python Flask bac
    - Click **Translate**. The status box displays elapsed processing time until the backend responds, while the backend terminal logs per-image and per-phase timing breakdowns (`[Timing] ...`).
    - Once complete, each page is shown side by side on desktop (or switchable **Original** / **Translated** reader tabs on mobile/tablet).
 5. **Export to PDF**:
-   - After results appear, click **Download PDF** to combine the translated images into a single `translated_comic.pdf` file.
+   - After results appear, click **Download PDF** (`jsPDF` is loaded on demand) to combine the translated images into a single `translated_comic.pdf` file.
 6. **View, rename, or delete history**:
    - Open **History** from any connected device to browse past translation sessions saved on the desktop backend (`backend/static/history.json`).
    - Toggle between grid and list layouts, rename batches (persisted on the server and synced across devices), click any entry to open the reader modal, delete individual batches, or click **Clear All** to clear all saved history and delete files from `backend/static/uploads/`.
@@ -116,7 +116,7 @@ The application consists of two processes that run locally: a **Python Flask bac
 
 ## Running Backend Tests
 
-The `backend/tests/` directory contains 46 unit and integration tests across 8 modules covering OCR LRU caching, offline-first YOLOv5 loading, bubble extraction, cross-page batched Manga-OCR, binary-search text rendering with pixel-equivalence checks, OCR text cleaning / hyphenation rules, single-batch history deletion, and Wi-Fi client-server settings/history/proxy contracts:
+The `backend/tests/` directory contains 47 unit and integration tests across 8 modules covering OCR LRU caching, offline-first YOLOv5 loading, bubble extraction, cross-page batched Manga-OCR, binary-search text rendering with pixel-equivalence checks, OCR text cleaning / hyphenation rules, single-batch history deletion, static upload immutable caching, and Wi-Fi client-server settings/history/proxy contracts:
 
 ```powershell
 backend\.venv\Scripts\python.exe -m unittest discover -s backend/tests -v

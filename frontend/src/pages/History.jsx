@@ -305,7 +305,7 @@ const History = () => {
               <div
                 key={item.id}
                 onClick={() => openModal(item)}
-                className={`bg-black/60 backdrop-blur-md rounded-xl border border-white/10 cursor-pointer group hover:border-brand-blue hover:shadow-[0_0_20px_rgba(38,123,250,0.2)] transition-all overflow-hidden ${
+                className={`bg-black/70 md:bg-black/60 md:backdrop-blur-md rounded-xl border border-white/10 cursor-pointer group hover:border-brand-blue hover:shadow-[0_0_20px_rgba(38,123,250,0.2)] transition-[border-color,box-shadow] overflow-hidden [contain:layout_style_paint] ${
                   viewMode === 'list'
                     ? 'flex flex-row items-stretch min-h-[120px]'
                     : 'flex flex-col'
@@ -322,7 +322,9 @@ const History = () => {
                   <img
                     src={item.images[0]?.original}
                     alt={customName || 'Batch thumbnail'}
-                    className="w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500"
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover opacity-80 group-hover:opacity-100 md:group-hover:scale-105 transition-opacity duration-300 md:transition-[opacity,transform] md:duration-500"
                   />
                 </div>
 
@@ -394,7 +396,7 @@ const History = () => {
           role="dialog"
           aria-modal="true"
           aria-label="Batch viewer"
-          className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-sm flex flex-col items-center p-0"
+          className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center p-0"
         >
           {/* Modal Top Bar */}
           <div className="w-full max-w-[1400px] flex items-start sm:items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4 border-b border-white/10 shrink-0">
@@ -467,7 +469,7 @@ const History = () => {
           </div>
 
           {/* Scrollable Batch Viewer Body */}
-          <div className="w-full max-w-[1400px] flex-1 overflow-y-auto p-0 lg:px-4 lg:py-4">
+          <div className="w-full max-w-[1400px] flex-1 overflow-y-auto overscroll-contain p-0 lg:px-4 lg:py-4">
             <ComicBatchViewer
               key={selectedItem.id}
               images={selectedItem.images}

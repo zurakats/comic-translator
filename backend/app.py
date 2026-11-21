@@ -37,6 +37,17 @@ _settings_lock = threading.RLock()
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
+@app.after_request
+def add_static_upload_cache_headers(response):
+    if (
+        request.method == "GET"
+        and request.path.startswith("/static/uploads/")
+        and response.status_code == 200
+    ):
+        response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    return response
+
+
 def _write_json_atomic(filepath, data):
     parent_dir = os.path.dirname(os.path.abspath(filepath))
     os.makedirs(parent_dir, exist_ok=True)

@@ -81,22 +81,25 @@ const Settings = () => {
         <img
           src="/assets/hero-banner (2).jpg"
           alt="manga"
-          className="object-cover w-full h-full"
+          decoding="async"
+          className="hidden md:block object-cover w-full h-full"
         />
         <img
           src="/assets/hero-banner (3).jpg"
           alt="manga"
+          decoding="async"
           className="object-cover w-full h-full"
         />
         <img
           src="/assets/hero-banner (1).jpg"
           alt="manga"
-          className="object-cover w-full h-full"
+          decoding="async"
+          className="hidden md:block object-cover w-full h-full"
         />
       </div>
 
       {/* Settings Card */}
-      <div className="w-full max-w-[600px] my-auto bg-black/60 backdrop-blur-lg p-6 sm:p-10 rounded-2xl border border-white/10 shadow-2xl flex flex-col gap-6 sm:gap-8 z-10">
+      <div className="w-full max-w-[600px] my-auto bg-[#141414]/90 md:bg-black/60 md:backdrop-blur-lg p-6 sm:p-10 rounded-2xl border border-white/10 shadow-2xl flex flex-col gap-6 sm:gap-8 z-10">
         <div className="flex items-center gap-3 border-b border-white/10 pb-4">
           <Settings2 size={28} className="text-brand-blue" />
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-wide">
@@ -117,7 +120,7 @@ const Settings = () => {
               value={engine}
               onChange={(e) => setEngine(e.target.value)}
               disabled={isLoading || isSaving}
-              className="w-full p-4 pr-12 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-all cursor-pointer shadow-inner appearance-none disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full p-4 pr-12 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-[border-color,box-shadow] cursor-pointer shadow-inner appearance-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <option value="googletrans">
                 Google Translate (Free &amp; Default)
@@ -148,7 +151,7 @@ const Settings = () => {
               onChange={(e) => setApiKey(e.target.value)}
               disabled={isLoading || isSaving}
               placeholder="Enter your API key here..."
-              className="p-4 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-all placeholder:text-white/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="p-4 bg-brand-dark text-white border border-white/20 rounded-xl text-base sm:text-lg focus:outline-none focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/50 transition-[border-color,box-shadow] placeholder:text-white/30 disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <p className="text-sm text-white/50 mt-1 leading-relaxed">
               Get a free API key at{' '}
@@ -156,7 +159,7 @@ const Settings = () => {
                 href="https://aistudio.google.com/"
                 target="_blank"
                 rel="noreferrer"
-                className="text-brand-blue font-bold hover:underline transition-all"
+                className="text-brand-blue font-bold hover:underline transition-colors"
               >
                 Google AI Studio
               </a>
@@ -180,7 +183,7 @@ const Settings = () => {
           type="button"
           onClick={handleSave}
           disabled={isLoading || isSaving}
-          className="mt-2 flex items-center justify-center gap-3 w-full py-4 bg-brand-blue text-white text-base sm:text-lg font-bold tracking-widest rounded-xl hover:bg-brand-blue-hover transition-all duration-300 shadow-[0_4px_14px_rgba(38,123,250,0.3)] hover:shadow-[0_6px_20px_rgba(38,123,250,0.4)] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="mt-2 flex items-center justify-center gap-3 w-full py-4 bg-brand-blue text-white text-base sm:text-lg font-bold tracking-widest rounded-xl hover:bg-brand-blue-hover transition-[background-color,box-shadow] duration-300 shadow-[0_4px_14px_rgba(38,123,250,0.3)] hover:shadow-[0_6px_20px_rgba(38,123,250,0.4)] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Save size={22} />
           {isLoading ? 'LOADING...' : isSaving ? 'SAVING...' : 'SAVE SETTINGS'}
