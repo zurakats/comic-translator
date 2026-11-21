@@ -499,9 +499,10 @@ def render_bubbles(img_pil, bubbles, translations, targetLang,
         unbreakable_words = tuple(sorted({w for w in words if len(w) <= 5}, key=len, reverse=True)[:3])
 
         fitted = None
-        font_size = 110
-        while font_size > 12:
-            font = get_font(font_path, font_size)
+        lo, hi = 12, 110
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            font = get_font(font_path, mid)
             res = _try_fit_layout(
                 translated,
                 draw,
@@ -515,8 +516,9 @@ def render_bubbles(img_pil, bubbles, translations, targetLang,
             )
             if res is not None:
                 fitted = res
-                break
-            font_size -= 1
+                lo = mid + 1
+            else:
+                hi = mid - 1
 
         if fitted is None:
             font = get_font(font_path, 12)

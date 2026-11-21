@@ -215,7 +215,7 @@ class TestRenderBubblesOptimization(unittest.TestCase):
             self.assertEqual(spy_truetype.call_count, first_calls)
 
     def test_no_redundant_post_loop_wrap_and_skips_oversized_line_height(self):
-        # Case 1: Wide short box fits on the first size where line_height <= avail_height -> only 1 wrap_text call
+        # Case 1: Wide short box skips oversized line_height (110) and probes distinct sizes without post-loop duplicate
         img_wide = Image.new("RGB", (300, 150), "black")
         wide_bubbles = [_make_bubble("mid", 20, 20, 260, 80, "text")]
         called_wide = []
@@ -228,10 +228,12 @@ class TestRenderBubblesOptimization(unittest.TestCase):
         with patch.object(self.ip, "wrap_text", side_effect=spy_wrap_wide):
             self.ip.render_bubbles(img_wide, wide_bubbles, {"mid": "Halo dunia!"}, "id", font_path=self.font_path)
 
-        self.assertEqual(len(called_wide), 1)
-        self.assertNotEqual(called_wide[0], 110)
+        self.assertGreaterEqual(len(called_wide), 1)
+        self.assertLessEqual(len(called_wide), 7)
+        self.assertEqual(len(called_wide), len(set(called_wide)))
+        self.assertNotIn(110, called_wide)
 
-        # Case 2: Narrower box steps down multiple sizes after line_height <= avail_height, without post-loop duplicate
+        # Case 2: Narrower box probes bounded distinct sizes without post-loop duplicate
         img_narrow = Image.new("RGB", (200, 150), "black")
         narrow_bubbles = [_make_bubble("narrow", 20, 20, 120, 80, "text")]
         called_narrow = []
@@ -249,9 +251,10 @@ class TestRenderBubblesOptimization(unittest.TestCase):
                 font_path=self.font_path,
             )
 
-        self.assertGreaterEqual(len(called_narrow), 2)
+        self.assertGreaterEqual(len(called_narrow), 1)
+        self.assertLessEqual(len(called_narrow), 7)
+        self.assertEqual(len(called_narrow), len(set(called_narrow)))
         self.assertNotIn(110, called_narrow)
-        self.assertNotEqual(called_narrow[-1], called_narrow[-2])
 
     def test_no_textbbox_calls_during_final_drawing(self):
         img = Image.new("RGB", (240, 140), "black")
@@ -356,6 +359,25 @@ class TestRenderBubblesOptimization(unittest.TestCase):
         broken = self.ip.break_word("pertanggungjawaban", draw, font_large, 100, "id")
         self.assertIsInstance(broken, list)
         self.assertGreater(len(broken), 1)
+
+    def test_binary_search_bounds_fit_iterations_per_bubble(self):
+        img = Image.new("RGB", (200, 400), "black")
+        bubbles = [_make_bubble("tall", 20, 20, 110, 360, "text")]
+        translations = {"tall": "Kau pikir aku akan menyerah begitu saja menghadapi iblis sekuat dirimu?!"}
+
+        orig_try_fit = self.ip._try_fit_layout
+        fit_calls = []
+
+        def spy_try_fit(*args, **kwargs):
+            fit_calls.append(args[2].size)
+            return orig_try_fit(*args, **kwargs)
+
+        with patch.object(self.ip, "_try_fit_layout", side_effect=spy_try_fit):
+            self.ip.render_bubbles(img, bubbles, translations, "id", font_path=self.font_path)
+
+        self.assertGreaterEqual(len(fit_calls), 1)
+        self.assertLessEqual(len(fit_calls), 7)
+        self.assertEqual(len(fit_calls), len(set(fit_calls)))
 
 
 if __name__ == "__main__":
